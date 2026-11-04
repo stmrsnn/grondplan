@@ -7,7 +7,7 @@ import { Proefbank } from "./Proefbank";
  * in het geheugen. Bestaat niet op de gepubliceerde site.
  */
 export default function Page() {
-  if (process.env.NODE_ENV === "production") notFound();
+  if (process.env.NODE_ENV === "production" && process.env.PROEFBANK !== "1") notFound();
   return (
     <ToastProvider>
       <Proefbank />

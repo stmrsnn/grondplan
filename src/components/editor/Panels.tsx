@@ -1,6 +1,7 @@
 "use client";
 
-import { ArrowDown, ArrowUp, PanelRightClose, RotateCcw, RotateCw, Trash2 } from "lucide-react";
+import { memo } from "react";
+import { ArrowDown, ArrowLeft, ArrowUp, PanelRightClose, RotateCcw, RotateCw, Trash2 } from "lucide-react";
 import { Button, IconButton } from "@/components/ui/Button";
 import { Field, Toggle } from "@/components/ui/Field";
 import { TermHelp } from "@/components/ui/Help";
@@ -13,7 +14,10 @@ import {
   setWallDefaults,
   updateFloor,
 } from "@/lib/model/commands";
+import type { FloorAnalysis } from "@/lib/geometry/plan";
 import type { ProjectDoc } from "@/lib/model/types";
+import type { Selection } from "./PlanLayers";
+import { Overview, SelectionPanel } from "./SelectionPanels";
 import { W } from "@/lib/words";
 import { LengthField } from "./LengthField";
 import { Compass } from "./NorthArrow";
@@ -39,18 +43,26 @@ function Section({ title, children }: { title: string; children: React.ReactNode
 }
 
 /** Rechterbalk: eigenschappen. Zonder selectie toont hij het plan zelf. */
-export function PropertiesPanel({
+export const PropertiesPanel = memo(function PropertiesPanel({
   store,
   doc,
   activeFloorId,
   onHide,
   toast,
+  selection,
+  setSelection,
+  analysis,
+  onDelete,
 }: {
   store: EditorStore;
   doc: ProjectDoc;
   activeFloorId: string;
   onHide: () => void;
   toast: (m: string) => void;
+  selection: Selection;
+  setSelection: (s: Selection) => void;
+  analysis: FloorAnalysis;
+  onDelete: () => void;
 }) {
   const floor = doc.floors.find((f) => f.id === activeFloorId) ?? doc.floors[0];
   const s = doc.settings;
@@ -62,7 +74,27 @@ export function PropertiesPanel({
   return (
     <aside className="flex h-full w-72 flex-col border-l border-line bg-bg" aria-label="Eigenschappen">
       <PanelHeader title="Eigenschappen" onHide={onHide} />
+      {selection ? (
+        <div className="flex flex-col gap-6 overflow-y-auto p-4">
+          <button
+            type="button"
+            onClick={() => setSelection(null)}
+            className="-mb-2 flex items-center gap-1 self-start text-[13px] text-ink-3 hover:text-ink"
+          >
+            <ArrowLeft size={14} /> Plan
+          </button>
+          <SelectionPanel
+            store={store}
+            doc={doc}
+            floor={floor}
+            selection={selection}
+            analysis={analysis}
+            onDelete={onDelete}
+          />
+        </div>
+      ) : (
       <div className="flex flex-col gap-6 overflow-y-auto p-4">
+        <Overview doc={doc} floor={floor} analysis={analysis} onSelect={setSelection} />
         <Section title={floor.name}>
           <Field
             label="Naam van de verdieping"
@@ -279,6 +311,7 @@ export function PropertiesPanel({
           />
         </Section>
       </div>
+      )}
     </aside>
   );
-}
+});

@@ -259,16 +259,27 @@ describe("document", () => {
   });
   it("zet een v1-document om naar v2", () => {
     const d = migrateDoc({ schemaVersion: 1, name: "Oud", settings: { snapToGrid: false, gridSize: 50 } });
-    expect(d.schemaVersion).toBe(2);
+    expect(d.schemaVersion).toBe(3);
     expect(d.start).toEqual({ kind: "house" });
     expect(d.settings.snapToGrid).toBe(false);
     expect(d.settings.wallDefaults).toEqual({ exterior: 350, interior: 100 });
     expect(d.settings.northAngle).toBe(0);
     expect(migrateDoc({ settings: { northAngle: -90 } }).settings.northAngle).toBe(270);
   });
-  it("bewaart de startkeuze van een kamer", () => {
-    const d = migrateDoc({ start: { kind: "room", width: 6000, depth: 4500, roomFunction: "living" } });
+  it("bewaart de startkeuze van een kamer en tekent ze eenmalig", () => {
+    const d = migrateDoc({ schemaVersion: 2, start: { kind: "room", width: 6000, depth: 4500, roomFunction: "living" } });
     expect(d.start).toEqual({ kind: "room", width: 6000, depth: 4500, roomFunction: "living" });
+    expect(d.floors[0].walls).toHaveLength(4);
+    expect(d.floors[0].rooms[0].name).toBe("Living");
+    // wie later alle muren wist, krijgt ze niet terug
+    const cleared = { ...d, floors: [{ ...d.floors[0], walls: [], nodes: [], rooms: [] }] };
+    expect(migrateDoc(JSON.parse(JSON.stringify(cleared))).floors[0].walls).toHaveLength(0);
+  });
+  it("nieuw project voor één kamer heeft meteen de juiste binnenmaat", () => {
+    const d = createDoc("Living", { kind: "room", width: 6000, depth: 4500, roomFunction: "living" });
+    const xs = d.floors[0].nodes.map((n) => n.x);
+    expect(Math.min(...xs)).toBe(-175);
+    expect(Math.max(...xs)).toBe(6175);
   });
 });
 

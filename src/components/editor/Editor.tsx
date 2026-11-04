@@ -13,17 +13,22 @@ import { ThemeToggle } from "@/components/ui/ThemeToggle";
 import { useToast } from "@/components/ui/Toast";
 import { Autosaver, type SaveStatus } from "@/lib/editor/autosave";
 import { EditorStore } from "@/lib/editor/store";
-import { DEFAULT_AREA, fitBounds, zoomAt, zoomPercent, type Viewport } from "@/lib/editor/viewport";
-import { formatMeters } from "@/lib/format";
-import { addFloor, renameProject, restoreVersion } from "@/lib/model/commands";
+import { DEFAULT_AREA, fitBounds, toScreen, zoomAt, zoomPercent, type Viewport } from "@/lib/editor/viewport";
+import { formatMeters, parseLength } from "@/lib/format";
+import { analyzeFloor, rebuildFloor, stretch, type RoomInfo } from "@/lib/geometry/plan";
+import { addFloor, editFloor, renameProject, restoreVersion } from "@/lib/model/commands";
 import { floorsBottomUp } from "@/lib/model/doc";
-import type { ProjectDoc } from "@/lib/model/types";
+import type { Vec } from "@/lib/geometry/vec";
+import type { Floor, ProjectDoc } from "@/lib/model/types";
 import { cleanName } from "@/lib/projects";
 import { W } from "@/lib/words";
 import type { EditorBackend } from "./backend";
 import { Compass } from "./NorthArrow";
 import { PropertiesPanel } from "./Panels";
 import { PlanCanvas } from "./PlanCanvas";
+import { Annotations, Chip, FloorLayer, GhostFloor, Guides, SnapMarker, type Selection } from "./PlanLayers";
+import { ToolRail } from "./ToolRail";
+import { chainPolygons, usePlanTools } from "./usePlanTools";
 import { SaveIndicator } from "./SaveIndicator";
 import { Toolbar } from "./Toolbar";
 import { VersionsDialog } from "./VersionsDialog";
@@ -38,22 +43,12 @@ const isTyping = (t: EventTarget | null) =>
   t instanceof HTMLElement &&
   (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable);
 
-export const ROOM_FUNCTIONS: Record<string, string> = {
-  living: "living",
-  slaapkamer: "slaapkamer",
-  keuken: "keuken",
-  badkamer: "badkamer",
-  bureau: "bureau",
-  andere: "kamer",
-};
-
-/** Het gebied dat we bij "alles in beeld" tonen. */
-function areaFor(doc: ProjectDoc) {
-  if (doc.start.kind === "room") {
-    const m = 1000;
-    return { minX: -m, minY: -m, maxX: doc.start.width + m, maxY: doc.start.depth + m };
-  }
-  return DEFAULT_AREA;
+/** Het gebied dat we bij "alles in beeld" tonen: de getekende muren, of een leeg blad. */
+function areaFor(floor: Floor) {
+  const b = analyzeFloor(floor).outerBounds;
+  if (!b) return DEFAULT_AREA;
+  const m = 1200;
+  return { minX: b.minX - m, minY: b.minY - m, maxX: b.maxX + m, maxY: b.maxY + m };
 }
 
 export function Editor({ initialDoc, backend, email }: EditorProps) {
@@ -62,6 +57,7 @@ export function Editor({ initialDoc, backend, email }: EditorProps) {
   const [store] = useState(() => new EditorStore(initialDoc));
   const state = useSyncExternalStore(store.subscribe, store.getState, store.getState);
   const { doc, activeFloorId } = state;
+  const floor = doc.floors.find((f) => f.id === activeFloorId) ?? doc.floors[0];
 
   // ---------- automatisch bewaren ----------
   const [saveStatus, setSaveStatus] = useState<SaveStatus>("saved");
@@ -97,9 +93,18 @@ export function Editor({ initialDoc, backend, email }: EditorProps) {
   }, [store, saver]);
 
   // ---------- beeld (zoomen en verschuiven) ----------
-  const [view, setView] = useState<Viewport | null>(null);
+  const [view, setViewState] = useState<Viewport | null>(null);
+  // tijdens verschuiven en zoomen tekenen we geen maten: zo blijft het vloeiend bij grote plannen
+  const [moving, setMoving] = useState(false);
+  const movingTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const setView: typeof setViewState = useCallback((v) => {
+    setViewState(v);
+    setMoving(true);
+    if (movingTimer.current) clearTimeout(movingTimer.current);
+    movingTimer.current = setTimeout(() => setMoving(false), 160);
+  }, []);
   const size = useRef({ w: 0, h: 0 });
-  const area = areaFor(doc);
+  const area = areaFor(floor);
   const onResize = useCallback(
     (w: number, h: number) => {
       size.current = { w, h };
@@ -109,11 +114,14 @@ export function Editor({ initialDoc, backend, email }: EditorProps) {
     [],
   );
   const fit = useCallback(() => {
-    setView(fitBounds(areaFor(store.getState().doc), size.current.w, size.current.h));
-  }, [store]);
-  const zoomBy = useCallback((f: number) => {
-    setView((v) => v && zoomAt(v, { x: size.current.w / 2, y: size.current.h / 2 }, f));
-  }, []);
+    const st = store.getState();
+    const f = st.doc.floors.find((x) => x.id === st.activeFloorId) ?? st.doc.floors[0];
+    setView(fitBounds(areaFor(f), size.current.w, size.current.h));
+  }, [store, setView]);
+  const zoomBy = useCallback(
+    (f: number) => setView((v) => v && zoomAt(v, { x: size.current.w / 2, y: size.current.h / 2 }, f)),
+    [setView],
+  );
 
   // ---------- ongedaan maken ----------
   const undo = useCallback(() => {
@@ -125,9 +133,73 @@ export function Editor({ initialDoc, backend, email }: EditorProps) {
     if (m) toast.show(m);
   }, [store, toast]);
 
+  // ---------- tekenen en selecteren ----------
+  const [selection, setSelection] = useState<Selection>(null);
+  const tools = usePlanTools({ store, doc, floor, view, selection, setSelection, toast: toast.show });
+  const shownFloor = tools.draft ?? floor;
+  const { setTool } = tools;
+  const selectFromPanel = useCallback(
+    (sel: Selection) => {
+      setSelection(sel);
+      if (sel) setTool("select");
+    },
+    [setTool],
+  );
+  const analysis = useMemo(() => analyzeFloor(shownFloor), [shownFloor]);
+  const below = useMemo(() => {
+    const sorted = floorsBottomUp(doc);
+    const i = sorted.findIndex((f) => f.id === floor.id);
+    return i > 0 ? analyzeFloor(sorted[i - 1]) : null;
+  }, [doc, floor.id]);
+  const [dimEdit, setDimEdit] = useState<{ room: RoomInfo; a: Vec; b: Vec; at: Vec; value: string } | null>(null);
+  // selectie die niet meer bestaat (na ongedaan maken, andere verdieping) wissen
+  useEffect(() => {
+    if (!selection) return;
+    const exists =
+      selection.kind === "room"
+        ? floor.rooms.some((r) => r.id === selection.id)
+        : selection.kind === "wall"
+          ? floor.walls.some((w) => w.id === selection.id)
+          : floor.nodes.some((n) => n.id === selection.id);
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- verouderde selectie opruimen
+    if (!exists) setSelection(null);
+  }, [floor, selection]);
+
+  const applyDim = (value: string) => {
+    if (!dimEdit) return;
+    const L = parseLength(value);
+    const { room } = dimEdit;
+    setDimEdit(null);
+    if (!L || L < 100) {
+      if (value.trim()) toast.show("Typ een maat, bijvoorbeeld 3,25");
+      return;
+    }
+    let { a, b } = dimEdit;
+    // groeien naar rechts of naar onder: dat voelt het meest voorspelbaar
+    if (b.x - a.x < -1 || (Math.abs(b.x - a.x) <= 1 && b.y < a.y)) [a, b] = [b, a];
+    const len = Math.hypot(b.x - a.x, b.y - a.y);
+    const u = { x: (b.x - a.x) / len, y: (b.y - a.y) / len };
+    const delta = L - len;
+    if (Math.abs(delta) < 1) return;
+    const next = stretch(floor, u, b.x * u.x + b.y * u.y, delta);
+    if (!next) {
+      toast.show("Zo klein kan niet: er staat een muur in de weg.");
+      return;
+    }
+    store.execute(
+      editFloor(floor, rebuildFloor(next), "Maat aangepast", `${room.room.name}: vorige maat teruggezet`, `${room.room.name}: nieuwe maat opnieuw toegepast`),
+    );
+    store.seal();
+    toast.show(`${room.room.name}: ${formatMeters(len)} → ${formatMeters(L)}`);
+  };
+
   // ---------- sneltoetsen ----------
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      if (!isTyping(e.target) && !(e.target instanceof HTMLSelectElement) && tools.onKey(e)) {
+        e.preventDefault();
+        return;
+      }
       const mod = e.metaKey || e.ctrlKey;
       const key = e.key.toLowerCase();
       if (mod && (key === "z" || key === "y")) {
@@ -144,10 +216,11 @@ export function Editor({ initialDoc, backend, email }: EditorProps) {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [undo, redo, zoomBy, fit]);
+  }, [undo, redo, zoomBy, fit, tools]);
 
   // ---------- rechterbalk ----------
   const [right, setRight] = useState(true);
+  const hidePanel = useCallback(() => setRight(false), []);
   useEffect(() => {
     if (window.innerWidth < 1200) {
       // eslint-disable-next-line react-hooks/set-state-in-effect -- smalle schermen: plan krijgt alle ruimte
@@ -205,21 +278,34 @@ export function Editor({ initialDoc, backend, email }: EditorProps) {
         <IconButton label="Eerdere versies" onClick={() => setVersionsOpen(true)}>
           <HistoryIcon size={20} />
         </IconButton>
-        <HelpButton title="Zo werkt het tekenvlak">
+        <HelpButton title="Zo werk je snel">
           <p>
-            <strong className="text-ink">Verschuiven:</strong> sleep het blad met de muis of met
-            één vinger. Op een trackpad schuif je met twee vingers.
+            <strong className="text-ink">Kamer (K):</strong> sleep een rechthoek. Of klik één hoek
+            en typ de binnenmaten, bv. <strong className="text-ink">4,5x3</strong> en Enter. Een
+            kamer tegen een bestaande muur deelt die muur vanzelf.
           </p>
           <p>
-            <strong className="text-ink">Zoomen:</strong> draai aan het muiswiel, knijp met twee
-            vingers, of gebruik de knoppen − en + bovenaan. Klik op het percentage om alles terug in
-            beeld te krijgen.
+            <strong className="text-ink">Muur (M):</strong> klik punt na punt. Typ tijdens het
+            tekenen een lengte en Enter. Eindig je op een muur of een hoek, dan stopt de muur
+            vanzelf. Muren lopen recht; houd Shift ingedrukt voor een schuine muur.
           </p>
           <p>
-            <strong className="text-ink">Vergissing?</strong> Met de pijltjes bovenaan (of Ctrl+Z)
-            maak je elke stap ongedaan. Via het klokje rechtsboven zet je een eerdere versie terug.
+            <strong className="text-ink">Maten aanpassen:</strong> klik op een maat in een kamer en
+            typ de nieuwe. De muur ernaast schuift mee, net als de rest van het plan.
           </p>
-          <p>Alles wordt vanzelf bewaard. Rechtsboven zie je &ldquo;{W.saved}&rdquo; staan.</p>
+          <p>
+            <strong className="text-ink">Selecteren (V):</strong> klik een kamer, muur of hoek. Sleep
+            een muur of hoek om hem te verplaatsen; pijltjestoetsen schuiven 5 cm (met Shift
+            50 cm). Delete verwijdert.
+          </p>
+          <p>
+            <strong className="text-ink">Rondkijken:</strong> sleep het lege blad, of houd de
+            spatiebalk ingedrukt. Zoom met het wieltje of twee vingers; 0 zet alles in beeld.
+          </p>
+          <p>
+            <strong className="text-ink">Vergissing?</strong> Ctrl+Z maakt elke stap ongedaan. Via
+            het klokje rechtsboven zet je een eerdere versie terug. Alles wordt vanzelf bewaard.
+          </p>
         </HelpButton>
         <ThemeToggle />
         {email && <AccountMenu email={email} />}
@@ -227,9 +313,94 @@ export function Editor({ initialDoc, backend, email }: EditorProps) {
 
       <div className="relative flex min-h-0 flex-1">
         <main className="relative min-w-0 flex-1 overflow-hidden" aria-label="Plan">
-          <PlanCanvas view={view} onViewChange={setView} onResize={onResize}>
-            {doc.start.kind === "room" && <StartRoom start={doc.start} />}
+          <PlanCanvas
+            view={view}
+            onViewChange={setView}
+            onResize={onResize}
+            onTool={tools.onTool}
+            cursor={tools.cursor}
+            overlay={(v) => (
+              <>
+                <Annotations
+                  analysis={analysis}
+                  view={v}
+                  showDims={!tools.draft && !moving}
+                  onEditEdge={(room, a, b, at) =>
+                    setDimEdit({ room, a, b, at, value: formatMeters(Math.hypot(b.x - a.x, b.y - a.y)).replace(" m", "") })
+                  }
+                />
+                {tools.preview.snap && <Guides guides={tools.preview.snap.guides} view={v} />}
+                {tools.preview.snap && tools.tool !== "select" && <SnapMarker snap={tools.preview.snap} view={v} />}
+                {selection?.kind === "node" && analysis.nodeById.get(selection.id) && (
+                  <circle
+                    cx={toScreen(v, analysis.nodeById.get(selection.id)!).x}
+                    cy={toScreen(v, analysis.nodeById.get(selection.id)!).y}
+                    r={6}
+                    fill="var(--accent)"
+                    stroke="var(--bg)"
+                    strokeWidth={2}
+                    pointerEvents="none"
+                  />
+                )}
+                {tools.preview.chip && tools.preview.chip.text && (
+                  <Chip at={{ x: toScreen(v, tools.preview.chip.at).x + 44, y: toScreen(v, tools.preview.chip.at).y - 22 }} text={tools.preview.chip.text} strong />
+                )}
+              </>
+            )}
+          >
+            {below && <GhostFloor analysis={below} />}
+            <FloorLayer analysis={analysis} selection={selection} hover={tools.hover} />
+            {tools.preview.chain && (
+              <g opacity={0.7}>
+                {chainPolygons(tools.preview.chain, tools.wallChoice === "exterior" ? doc.settings.wallDefaults.exterior : doc.settings.wallDefaults.interior).map((poly, i) => (
+                  <path key={i} d={`M${poly.map((p) => `${p.x} ${p.y}`).join("L")}Z`} fill="var(--accent)" />
+                ))}
+              </g>
+            )}
+            {tools.preview.rect && (
+              <g opacity={0.7}>
+                {chainPolygons(
+                  [
+                    tools.preview.rect.a,
+                    { x: tools.preview.rect.b.x, y: tools.preview.rect.a.y },
+                    tools.preview.rect.b,
+                    { x: tools.preview.rect.a.x, y: tools.preview.rect.b.y },
+                    tools.preview.rect.a,
+                  ],
+                  doc.settings.wallDefaults.exterior,
+                ).map((poly, i) => (
+                  <path key={i} d={`M${poly.map((p) => `${p.x} ${p.y}`).join("L")}Z`} fill="var(--accent)" />
+                ))}
+              </g>
+            )}
           </PlanCanvas>
+
+          {dimEdit && (
+            <input
+              autoFocus
+              aria-label="Nieuwe maat"
+              defaultValue={dimEdit.value}
+              onFocus={(e) => e.target.select()}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") applyDim((e.target as HTMLInputElement).value);
+                if (e.key === "Escape") setDimEdit(null);
+                e.stopPropagation();
+              }}
+              onBlur={(e) => applyDim(e.target.value)}
+              inputMode="decimal"
+              className="tabular absolute z-30 h-8 w-24 -translate-x-1/2 -translate-y-1/2 rounded-[var(--radius-control)] border-2 border-accent bg-bg px-2 text-center text-sm text-ink shadow-[var(--shadow-float)] outline-none"
+              style={{ left: dimEdit.at.x, top: dimEdit.at.y }}
+            />
+          )}
+
+          <ToolRail
+            tool={tools.tool}
+            setTool={tools.setTool}
+            wallChoice={tools.wallChoice}
+            setWallChoice={tools.setWallChoice}
+            buffer={tools.buffer}
+            defaults={doc.settings.wallDefaults}
+          />
 
           <div className="pointer-events-none absolute inset-x-0 top-3 flex items-start justify-between gap-2 px-3">
             <div className="pointer-events-auto" title="Noorden (aanpassen bij Eigenschappen)">
@@ -282,8 +453,12 @@ export function Editor({ initialDoc, backend, email }: EditorProps) {
               store={store}
               doc={doc}
               activeFloorId={activeFloorId}
-              onHide={() => setRight(false)}
+              onHide={hidePanel}
               toast={toast.show}
+              selection={selection}
+              setSelection={selectFromPanel}
+              analysis={analysis}
+              onDelete={tools.deleteSelection}
             />
           </div>
         )}
@@ -358,37 +533,6 @@ export function Editor({ initialDoc, backend, email }: EditorProps) {
   );
 }
 
-/** De kamer uit de welkomstvraag, als stippellijn tot muren tekenen beschikbaar is. */
-function StartRoom({ start }: { start: Extract<ProjectDoc["start"], { kind: "room" }> }) {
-  const label = ROOM_FUNCTIONS[start.roomFunction] ?? "kamer";
-  return (
-    <g>
-      <rect
-        x={0}
-        y={0}
-        width={start.width}
-        height={start.depth}
-        fill="var(--accent-soft)"
-        fillOpacity={0.5}
-        stroke="var(--accent)"
-        strokeWidth={2}
-        strokeDasharray="8 6"
-        vectorEffect="non-scaling-stroke"
-      />
-      <text
-        x={start.width / 2}
-        y={start.depth / 2}
-        textAnchor="middle"
-        dominantBaseline="middle"
-        fontSize={Math.min(220, Math.min(start.width, start.depth) / 14)}
-        fill="var(--accent-text)"
-      >
-        {label[0].toUpperCase() + label.slice(1)} · {formatMeters(start.width)} × {formatMeters(start.depth)}
-      </text>
-    </g>
-  );
-}
-
 function FloorTabs({
   doc,
   activeFloorId,
@@ -451,12 +595,11 @@ function EmptyHint({ doc }: { doc: ProjectDoc }) {
     <div className="pointer-events-none absolute inset-x-0 top-16 flex justify-center px-4">
       <div className="pointer-events-auto flex max-w-md items-start gap-3 rounded-[var(--radius-card)] border border-line bg-bg px-4 py-3 text-[13px] leading-relaxed text-ink-2 shadow-[var(--shadow-float)]">
         <p>
-          {room
-            ? "De stippellijn toont je kamer op ware grootte. "
-            : "Je tekenvlak is klaar. "}
-          <strong className="text-ink">Sleep</strong> om te verschuiven en{" "}
-          <strong className="text-ink">zoom</strong> met het muiswiel of twee vingers. Muren
-          tekenen komt in de volgende stap.
+          {room ? "Je kamer staat klaar, op ware grootte. " : ""}
+          Kies links <strong className="text-ink">Kamer</strong> (K) en sleep een rechthoek, of typ
+          de binnenmaten, bv. <strong className="text-ink">4x3</strong> en Enter. Met{" "}
+          <strong className="text-ink">Muur</strong> (M) deel je kamers op. Klik op een maat om ze
+          aan te passen.
         </p>
         <button
           type="button"

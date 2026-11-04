@@ -1,3 +1,4 @@
+import { addRectangle, functionLabel } from "../geometry/plan";
 import {
   SCHEMA_VERSION,
   type Floor,
@@ -38,13 +39,38 @@ export function createFloor(name: string, elevation = 0): Floor {
 }
 
 export function createDoc(name: string, start: StartChoice = { kind: "house" }): ProjectDoc {
-  return {
+  const doc: ProjectDoc = {
     schemaVersion: SCHEMA_VERSION,
     name,
     start,
     settings: structuredClone(DEFAULT_SETTINGS),
     floors: [createFloor("Gelijkvloers")],
   };
+  return withStartRoom(doc);
+}
+
+/**
+ * "Eén kamer inrichten": teken de kamer meteen, met de opgegeven binnenmaten
+ * en buitenmuren rondom.
+ */
+export function withStartRoom(doc: ProjectDoc): ProjectDoc {
+  const start = doc.start;
+  if (start.kind !== "room" || doc.floors.some((f) => f.walls.length > 0)) return doc;
+  const t = doc.settings.wallDefaults.exterior;
+  const floor = doc.floors[0];
+  const built = addRectangle(
+    floor,
+    { x: -t / 2, y: -t / 2 },
+    { x: start.width + t / 2, y: start.depth + t / 2 },
+    { thickness: t, height: floor.height, kind: "exterior", loadBearing: true },
+  );
+  const label = functionLabel(start.roomFunction);
+  const rooms = built.rooms.map((r) => ({
+    ...r,
+    name: start.roomFunction === "andere" ? "Kamer" : label,
+    function: start.roomFunction,
+  }));
+  return { ...doc, floors: [{ ...built, rooms }, ...doc.floors.slice(1)] };
 }
 
 const isNum = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v);
@@ -68,6 +94,7 @@ function migrateStart(raw: unknown): StartChoice {
 /**
  * Zet een bewaard document om naar de huidige versie.
  * v1 → v2: startkeuze, standaardmuren, maatafspraak en noordrichting aangevuld.
+ * v2 → v3: de kamer uit de startvraag wordt eenmalig getekend.
  * Ontbrekende of kapotte velden worden aangevuld zodat de app nooit crasht.
  */
 export function migrateDoc(raw: unknown, fallbackName = "Naamloos project"): ProjectDoc {
@@ -81,7 +108,8 @@ export function migrateDoc(raw: unknown, fallbackName = "Naamloos project"): Pro
   }
   const floors = Array.isArray(r.floors) && r.floors.length > 0 ? r.floors : base.floors;
   const s = (r.settings ?? {}) as Partial<ProjectSettings>;
-  return {
+  const fromVersion = typeof r.schemaVersion === "number" ? r.schemaVersion : 1;
+  const migrated: ProjectDoc = {
     schemaVersion: SCHEMA_VERSION,
     name: typeof r.name === "string" && r.name.trim() ? r.name : fallbackName,
     start: migrateStart(r.start),
@@ -97,6 +125,8 @@ export function migrateDoc(raw: unknown, fallbackName = "Naamloos project"): Pro
       ...f,
     })),
   };
+  // v2 → v3: een "één kamer"-project van vóór het tekenen krijgt eenmalig zijn muren
+  return fromVersion < 3 ? withStartRoom(migrated) : migrated;
 }
 
 export function normalizeAngle(deg: number): number {

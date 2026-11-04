@@ -1,6 +1,6 @@
 import type { Command } from "../history/history";
 import { createFloor, DEFAULT_STOREY, floorNameFor, floorsBottomUp, normalizeAngle } from "./doc";
-import type { Floor, Id, ProjectDoc, ProjectSettings, WallDefaults } from "./types";
+import type { Floor, Id, ProjectDoc, ProjectSettings, Room, Wall, WallDefaults } from "./types";
 
 type Cmd = Command<ProjectDoc>;
 
@@ -122,5 +122,80 @@ export function restoreVersion(current: ProjectDoc, version: ProjectDoc, when: s
     redoMessage: `Versie van ${when} opnieuw teruggezet`,
     apply: () => version,
     revert: () => current,
+  };
+}
+
+/**
+ * Elke tekenhandeling (muur, kamer, verslepen, maat aanpassen) vervangt de
+ * verdieping door een nieuwe versie. Omdat verdiepingen onveranderlijk zijn,
+ * bewaart dit enkel twee verwijzingen: snel en zuinig, ook bij grote plannen.
+ */
+export function editFloor(
+  before: Floor,
+  after: Floor,
+  label: string,
+  undoMessage?: string,
+  redoMessage?: string,
+): Cmd {
+  return {
+    label,
+    undoMessage: undoMessage ?? `Teruggedraaid: ${label.toLowerCase()}`,
+    redoMessage: redoMessage ?? `Opnieuw: ${label.toLowerCase()}`,
+    apply: (d) =>
+      before === after
+        ? d
+        : { ...d, floors: d.floors.map((f) => (f.id === before.id ? after : f)) },
+    revert: (d) => ({ ...d, floors: d.floors.map((f) => (f.id === before.id ? before : f)) }),
+  };
+}
+
+/** Eigenschappen van een ruimte (naam, functie, vloer) aanpassen. */
+export function updateRoom(
+  floorId: Id,
+  roomId: Id,
+  from: Partial<Pick<Room, "name" | "function" | "floorFinish">>,
+  to: Partial<Pick<Room, "name" | "function" | "floorFinish">>,
+): Cmd {
+  const keys = Object.keys(to) as (keyof typeof to)[];
+  return {
+    label: "Ruimte aangepast",
+    undoMessage: "Ruimte: vorige gegevens teruggezet",
+    redoMessage: "Ruimte: wijziging opnieuw toegepast",
+    mergeKey: `room:${roomId}:${keys.sort().join(",")}`,
+    apply: (d) =>
+      mapFloor(d, floorId, (f) => ({
+        ...f,
+        rooms: f.rooms.map((r) => (r.id === roomId ? { ...r, ...to } : r)),
+      })),
+    revert: (d) =>
+      mapFloor(d, floorId, (f) => ({
+        ...f,
+        rooms: f.rooms.map((r) => (r.id === roomId ? { ...r, ...from } : r)),
+      })),
+  };
+}
+
+/** Eigenschappen van een muur (dikte, hoogte, dragend) aanpassen. */
+export function updateWall(
+  floorId: Id,
+  wallId: Id,
+  from: Partial<Pick<Wall, "thickness" | "height" | "loadBearing">>,
+  to: Partial<Pick<Wall, "thickness" | "height" | "loadBearing">>,
+  what: string,
+): Cmd {
+  return {
+    label: `Muur: ${what} aangepast`,
+    undoMessage: `Muur: vorige ${what} teruggezet`,
+    redoMessage: `Muur: nieuwe ${what} opnieuw toegepast`,
+    apply: (d) =>
+      mapFloor(d, floorId, (f) => ({
+        ...f,
+        walls: f.walls.map((w) => (w.id === wallId ? { ...w, ...to } : w)),
+      })),
+    revert: (d) =>
+      mapFloor(d, floorId, (f) => ({
+        ...f,
+        walls: f.walls.map((w) => (w.id === wallId ? { ...w, ...from } : w)),
+      })),
   };
 }

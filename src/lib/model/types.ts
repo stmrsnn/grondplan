@@ -12,8 +12,9 @@
  * Versiegeschiedenis van het schema:
  *  1 – verdiepingen, muren, openingen, ruimtes, meubels
  *  2 – startkeuze, standaardmuren, maatafspraak, noordrichting
+ *  3 – muren en ruimtes worden getekend; "één kamer" krijgt meteen haar muren
  */
-export const SCHEMA_VERSION = 2;
+export const SCHEMA_VERSION = 3;
 
 export type Id = string;
 

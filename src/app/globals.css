@@ -29,6 +29,7 @@
   --grid-minor: #e9eef3;
   --grid-major: #d5dee8;
   --ink: #1f2933;
+  --wall: #1f2933;
   --backdrop: rgb(15 20 26 / 0.35);
   --shadow: 0 1px 2px rgb(15 20 26 / 0.06), 0 8px 24px rgb(15 20 26 / 0.08);
 }
@@ -59,6 +60,7 @@
     --grid-minor: #19212a;
     --grid-major: #26313d;
     --ink: #e6eaef;
+    --wall: #9aa5b1;
     --backdrop: rgb(0 0 0 / 0.55);
     --shadow: 0 1px 2px rgb(0 0 0 / 0.3), 0 8px 24px rgb(0 0 0 / 0.35);
   }
@@ -89,6 +91,7 @@
   --grid-minor: #19212a;
   --grid-major: #26313d;
   --ink: #e6eaef;
+  --wall: #9aa5b1;
   --backdrop: rgb(0 0 0 / 0.55);
   --shadow: 0 1px 2px rgb(0 0 0 / 0.3), 0 8px 24px rgb(0 0 0 / 0.35);
 }

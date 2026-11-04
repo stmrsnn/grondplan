@@ -328,7 +328,7 @@ function CardPreview({ raw }: { raw: unknown }) {
       {preview ? (
         <svg viewBox={`0 0 ${preview.w} ${preview.h}`} className="h-full w-full">
           {preview.lines.map(([x1, y1, x2, y2, t], i) => (
-            <line key={i} x1={x1} y1={y1} x2={x2} y2={y2} stroke="var(--ink)" strokeWidth={t} strokeLinecap="square" />
+            <line key={i} x1={x1} y1={y1} x2={x2} y2={y2} stroke="var(--wall)" strokeWidth={t} strokeLinecap="square" />
           ))}
         </svg>
       ) : (
