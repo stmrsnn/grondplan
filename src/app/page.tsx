@@ -1,5 +1,6 @@
 import { Armchair, Ruler, Undo2 } from "lucide-react";
 import { SignInButton } from "@/components/SignInButton";
+import { Footer } from "@/components/LegalPage";
 import { AppHeader } from "@/components/ui/AppHeader";
 
 // Persoonlijke pagina (aanmelding, eigen projecten): altijd vers op de server opbouwen.
@@ -61,6 +62,7 @@ export default async function Home({
         </div>
         <PlanIllustration />
       </main>
+      <Footer />
     </div>
   );
 }
