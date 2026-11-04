@@ -1,0 +1,147 @@
+@import "tailwindcss";
+
+/*
+ * Stijl B · fris en helder.
+ * Alle kleuren komen uit deze tokens; componenten gebruiken nooit losse hex-waarden.
+ */
+:root {
+  color-scheme: light;
+  --bg: #ffffff;
+  --surface: #fafbfc;
+  --surface-2: #f1f4f8;
+  --border: #e4e9ef;
+  --border-strong: #cdd5df;
+  --text: #1f2933;
+  --text-2: #52606d;
+  --text-3: #7b8794;
+  --accent: #2f6feb;
+  --accent-hover: #2558c7;
+  --accent-soft: #e8f0fe;
+  --accent-text: #1a4fb8;
+  --on-accent: #ffffff;
+  --warn-bg: #fff8e1;
+  --warn-text: #7a5a00;
+  --danger: #c62828;
+  --danger-hover: #a61f1f;
+  --danger-soft: #fdecec;
+  --success: #2e8b57;
+  --canvas: #f7f9fb;
+  --grid-minor: #e9eef3;
+  --grid-major: #d5dee8;
+  --ink: #1f2933;
+  --backdrop: rgb(15 20 26 / 0.35);
+  --shadow: 0 1px 2px rgb(15 20 26 / 0.06), 0 8px 24px rgb(15 20 26 / 0.08);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --bg: #0f141a;
+    --surface: #151b22;
+    --surface-2: #1c242d;
+    --border: #26303b;
+    --border-strong: #364250;
+    --text: #e6eaef;
+    --text-2: #a9b4c0;
+    --text-3: #7d8894;
+    --accent: #5b8def;
+    --accent-hover: #7aa3f2;
+    --accent-soft: #1b2a44;
+    --accent-text: #a9c4f7;
+    --on-accent: #0b1220;
+    --warn-bg: #3a2f10;
+    --warn-text: #f3d68a;
+    --danger: #ef6b6b;
+    --danger-hover: #f48b8b;
+    --danger-soft: #3a1c1c;
+    --success: #5cc48a;
+    --canvas: #11171e;
+    --grid-minor: #19212a;
+    --grid-major: #26313d;
+    --ink: #e6eaef;
+    --backdrop: rgb(0 0 0 / 0.55);
+    --shadow: 0 1px 2px rgb(0 0 0 / 0.3), 0 8px 24px rgb(0 0 0 / 0.35);
+  }
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #0f141a;
+  --surface: #151b22;
+  --surface-2: #1c242d;
+  --border: #26303b;
+  --border-strong: #364250;
+  --text: #e6eaef;
+  --text-2: #a9b4c0;
+  --text-3: #7d8894;
+  --accent: #5b8def;
+  --accent-hover: #7aa3f2;
+  --accent-soft: #1b2a44;
+  --accent-text: #a9c4f7;
+  --on-accent: #0b1220;
+  --warn-bg: #3a2f10;
+  --warn-text: #f3d68a;
+  --danger: #ef6b6b;
+  --danger-hover: #f48b8b;
+  --danger-soft: #3a1c1c;
+  --success: #5cc48a;
+  --canvas: #11171e;
+  --grid-minor: #19212a;
+  --grid-major: #26313d;
+  --ink: #e6eaef;
+  --backdrop: rgb(0 0 0 / 0.55);
+  --shadow: 0 1px 2px rgb(0 0 0 / 0.3), 0 8px 24px rgb(0 0 0 / 0.35);
+}
+
+@theme inline {
+  --color-bg: var(--bg);
+  --color-surface: var(--surface);
+  --color-surface-2: var(--surface-2);
+  --color-line: var(--border);
+  --color-line-strong: var(--border-strong);
+  --color-ink: var(--text);
+  --color-ink-2: var(--text-2);
+  --color-ink-3: var(--text-3);
+  --color-accent: var(--accent);
+  --color-accent-hover: var(--accent-hover);
+  --color-accent-soft: var(--accent-soft);
+  --color-accent-ink: var(--accent-text);
+  --color-on-accent: var(--on-accent);
+  --color-warn-bg: var(--warn-bg);
+  --color-warn-ink: var(--warn-text);
+  --color-danger: var(--danger);
+  --color-danger-hover: var(--danger-hover);
+  --color-danger-soft: var(--danger-soft);
+  --color-success: var(--success);
+  --color-canvas: var(--canvas);
+  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --radius-control: 8px;
+  --radius-card: 12px;
+  --shadow-float: var(--shadow);
+}
+
+html,
+body {
+  height: 100%;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+}
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+dialog::backdrop {
+  background: var(--backdrop);
+}
+
+/* getallen met gelijke breedte, zodat maten niet verspringen */
+.tabular {
+  font-variant-numeric: tabular-nums;
+}
