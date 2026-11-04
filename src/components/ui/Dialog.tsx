@@ -36,6 +36,12 @@ function OpenDialog({ onClose, title, children, actions, width = 440 }: DialogPr
     d.showModal();
     // de browser zet de focus op het kruisje; zet ze op het eerste invulveld
     d.querySelector<HTMLElement>("input, textarea, select")?.focus();
+    // Verlaat je de pagina terwijl de pop-up open is (Next houdt de vorige pagina
+    // verborgen bij), dan moet ze echt dicht: een onzichtbare open pop-up
+    // blokkeert anders elke klik op de nieuwe pagina.
+    return () => {
+      if (d.open) d.close();
+    };
   }, []);
 
   return (

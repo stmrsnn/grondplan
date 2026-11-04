@@ -217,8 +217,8 @@ function NameDialog({
     setBusy(true);
     try {
       const to = await onSubmit(clean);
+      onClose();
       if (to) router.push(to);
-      else onClose();
     } catch {
       setBusy(false);
       setError("Dat lukte niet. Controleer je internetverbinding en probeer opnieuw.");

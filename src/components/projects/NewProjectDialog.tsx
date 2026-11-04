@@ -103,6 +103,7 @@ export function NewProjectDialog({ open, onClose }: { open: boolean; onClose: ()
     setBusy(true);
     try {
       const id = await createProject(clean, start);
+      onClose();
       router.push(`/projecten/${id}`);
     } catch {
       setBusy(false);
