@@ -1,86 +1,40 @@
 "use client";
 
-import {
-  Armchair,
-  Bath,
-  BedDouble,
-  ChefHat,
-  PanelLeftClose,
-  PanelRightClose,
-  Plus,
-  Search,
-  Trash2,
-  TreePine,
-  Archive,
-  UtensilsCrossed,
-} from "lucide-react";
+import { ArrowDown, ArrowUp, PanelRightClose, RotateCcw, RotateCw, Trash2 } from "lucide-react";
 import { Button, IconButton } from "@/components/ui/Button";
 import { Field, Toggle } from "@/components/ui/Field";
 import { TermHelp } from "@/components/ui/Help";
 import type { EditorStore } from "@/lib/editor/store";
-import { addFloor, changeSettings, removeFloor, updateFloor } from "@/lib/model/commands";
+import {
+  addFloor,
+  removeFloor,
+  setNorth,
+  setSnap,
+  setWallDefaults,
+  updateFloor,
+} from "@/lib/model/commands";
 import type { ProjectDoc } from "@/lib/model/types";
 import { W } from "@/lib/words";
 import { LengthField } from "./LengthField";
+import { Compass } from "./NorthArrow";
 
-function PanelHeader({
-  title,
-  onHide,
-  side,
-}: {
-  title: string;
-  onHide: () => void;
-  side: "left" | "right";
-}) {
+function PanelHeader({ title, onHide }: { title: string; onHide: () => void }) {
   return (
     <div className="flex h-12 shrink-0 items-center justify-between border-b border-line pl-4 pr-2">
       <h2 className="text-[13px] font-semibold uppercase tracking-wide text-ink-3">{title}</h2>
       <IconButton size="sm" label={`${title} verbergen`} onClick={onHide}>
-        {side === "left" ? <PanelLeftClose size={18} /> : <PanelRightClose size={18} />}
+        <PanelRightClose size={18} />
       </IconButton>
     </div>
   );
 }
 
-const CATEGORIES = [
-  { name: "Zitten", icon: Armchair },
-  { name: "Slapen", icon: BedDouble },
-  { name: "Eten", icon: UtensilsCrossed },
-  { name: "Keuken", icon: ChefHat },
-  { name: "Badkamer", icon: Bath },
-  { name: "Opbergen", icon: Archive },
-  { name: "Buiten", icon: TreePine },
-];
-
-/** Linkerbalk: de bibliotheek met meubels (wordt gevuld in stap 5). */
-export function LibraryPanel({ onHide }: { onHide: () => void }) {
+function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
-    <aside className="flex h-full w-64 flex-col border-r border-line bg-bg" aria-label="Bibliotheek">
-      <PanelHeader title="Bibliotheek" onHide={onHide} side="left" />
-      <div className="flex flex-col gap-3 overflow-y-auto p-3">
-        <label className="flex h-9 items-center gap-2 rounded-[var(--radius-control)] border border-line bg-bg px-3 text-ink-3 focus-within:border-accent">
-          <Search size={16} />
-          <input
-            placeholder="Zoek een meubel"
-            className="min-w-0 flex-1 bg-transparent text-sm text-ink outline-none placeholder:text-ink-3"
-          />
-        </label>
-        <ul className="flex flex-col gap-0.5">
-          {CATEGORIES.map(({ name, icon: Icon }) => (
-            <li
-              key={name}
-              className="flex h-9 items-center gap-3 rounded-[var(--radius-control)] px-2.5 text-sm text-ink-2"
-            >
-              <Icon size={18} className="text-ink-3" />
-              {name}
-            </li>
-          ))}
-        </ul>
-        <p className="rounded-[var(--radius-control)] bg-surface-2 px-3 py-2.5 text-[13px] leading-relaxed text-ink-2">
-          Hier komen binnenkort meubels met echte afmetingen, die je zo in je plan sleept.
-        </p>
-      </div>
-    </aside>
+    <section className="flex flex-col gap-3 border-t border-line pt-5 first:border-t-0 first:pt-0">
+      <h3 className="text-sm font-semibold">{title}</h3>
+      {children}
+    </section>
   );
 }
 
@@ -99,25 +53,64 @@ export function PropertiesPanel({
   toast: (m: string) => void;
 }) {
   const floor = doc.floors.find((f) => f.id === activeFloorId) ?? doc.floors[0];
+  const s = doc.settings;
+  const commit = (cmd: Parameters<EditorStore["execute"]>[0]) => {
+    store.execute(cmd);
+    store.seal();
+  };
 
   return (
     <aside className="flex h-full w-72 flex-col border-l border-line bg-bg" aria-label="Eigenschappen">
-      <PanelHeader title="Eigenschappen" onHide={onHide} side="right" />
+      <PanelHeader title="Eigenschappen" onHide={onHide} />
       <div className="flex flex-col gap-6 overflow-y-auto p-4">
-        <section className="flex flex-col gap-3">
-          <h3 className="text-sm font-semibold">{floor.name}</h3>
+        <Section title={floor.name}>
           <Field
             label="Naam van de verdieping"
             value={floor.name}
             maxLength={60}
             onChange={(e) =>
-              store.execute(updateFloor(floor.id, { name: floor.name }, { name: e.target.value }))
+              store.execute(
+                updateFloor(floor.id, { name: floor.name }, { name: e.target.value }, floor.name),
+              )
             }
             onBlur={(e) => {
               store.seal();
               if (!e.target.value.trim())
-                store.execute(updateFloor(floor.id, { name: e.target.value }, { name: "Verdieping" }));
+                commit(updateFloor(floor.id, { name: e.target.value }, { name: "Verdieping" }, "Verdieping"));
             }}
+          />
+          <LengthField
+            label="Vloerpeil"
+            value={floor.elevation}
+            min={-9000}
+            max={60000}
+            hint={
+              <span className="inline-flex items-center gap-1">
+                Hoogte van deze vloer t.o.v. het gelijkvloers
+                <TermHelp term="Vloerpeil">
+                  <p>
+                    Het peil zegt hoe hoog een vloer ligt ten opzichte van het gelijkvloers. Het
+                    gelijkvloers ligt op 0,00 m.
+                  </p>
+                  <p>
+                    Een verdieping erboven ligt meestal op 2,90 m: de plafondhoogte plus de dikte
+                    van de vloer. Een kelder ligt onder nul, bijvoorbeeld op −2,90 m. Een tussenniveau
+                    kan ook, bijvoorbeeld 1,45 m.
+                  </p>
+                  <svg viewBox="0 0 220 120" className="w-full max-w-[260px]" aria-hidden="true">
+                    <rect x="30" y="20" width="120" height="6" fill="var(--text-3)" />
+                    <rect x="30" y="62" width="120" height="6" fill="var(--text-2)" />
+                    <rect x="30" y="104" width="120" height="6" fill="var(--text-3)" />
+                    <text x="158" y="28" fontSize="11" fill="var(--text)">+2,90 m</text>
+                    <text x="158" y="70" fontSize="11" fill="var(--accent)">0,00 m</text>
+                    <text x="158" y="112" fontSize="11" fill="var(--text)">−2,90 m</text>
+                  </svg>
+                </TermHelp>
+              </span>
+            }
+            onCommit={(mm) =>
+              commit(updateFloor(floor.id, { elevation: floor.elevation }, { elevation: mm }, floor.name))
+            }
           />
           <LengthField
             label="Plafondhoogte"
@@ -143,10 +136,9 @@ export function PropertiesPanel({
                 </TermHelp>
               </span>
             }
-            onCommit={(mm) => {
-              store.execute(updateFloor(floor.id, { height: floor.height }, { height: mm }));
-              store.seal();
-            }}
+            onCommit={(mm) =>
+              commit(updateFloor(floor.id, { height: floor.height }, { height: mm }, floor.name))
+            }
           />
           {doc.floors.length > 1 && (
             <Button
@@ -157,43 +149,135 @@ export function PropertiesPanel({
               onClick={() => {
                 const cmd = removeFloor(doc, floor.id);
                 if (cmd) {
-                  store.execute(cmd);
+                  commit(cmd);
                   toast(`${floor.name} verwijderd. Ongedaan maken kan altijd.`);
                 }
               }}
             >
-              Verdieping {W.remove.toLowerCase()}
+              {floor.name} {W.remove.toLowerCase()}
             </Button>
           )}
-        </section>
+        </Section>
 
-        <section className="flex flex-col gap-3 border-t border-line pt-5">
-          <h3 className="text-sm font-semibold">Verdiepingen</h3>
-          <Button
-            size="sm"
-            icon={<Plus size={16} />}
-            className="self-start"
-            onClick={() => {
-              const { cmd, floorId } = addFloor(doc);
-              store.execute(cmd);
-              store.setActiveFloor(floorId);
-            }}
-          >
-            Verdieping {W.add.toLowerCase()}
-          </Button>
-        </section>
+        <Section title="Verdiepingen">
+          <div className="flex flex-wrap gap-2">
+            <Button
+              size="sm"
+              icon={<ArrowUp size={16} />}
+              onClick={() => {
+                const { cmd, floorId } = addFloor(doc, "above");
+                commit(cmd);
+                store.setActiveFloor(floorId);
+              }}
+            >
+              Verdieping erboven
+            </Button>
+            <Button
+              size="sm"
+              icon={<ArrowDown size={16} />}
+              onClick={() => {
+                const { cmd, floorId } = addFloor(doc, "below");
+                commit(cmd);
+                store.setActiveFloor(floorId);
+              }}
+            >
+              Kelder eronder
+            </Button>
+          </div>
+        </Section>
 
-        <section className="flex flex-col gap-3 border-t border-line pt-5">
-          <h3 className="text-sm font-semibold">Tekenhulp</h3>
+        <Section title="Muren">
+          <div className="flex items-start gap-1 text-[13px] leading-relaxed text-ink-2">
+            <span>
+              Maten op het plan zijn <strong className="text-ink">binnenmaten</strong>: van muur tot
+              muur, zoals je zelf meet met een rolmeter.
+            </span>
+            <TermHelp term="Binnenmaten">
+              <p>
+                Een binnenmaat meet je binnen in de kamer, van de ene afgewerkte muur tot de andere.
+                Zo meet iedereen thuis, en zo past je meubel ook echt.
+              </p>
+              <p>
+                De dikte van de muren komt daar nog bij. Bij het afdrukken voor een aannemer zetten we
+                ook de buitenmaten op het plan.
+              </p>
+              <svg viewBox="0 0 220 90" className="w-full max-w-[260px]" aria-hidden="true">
+                <rect x="10" y="20" width="200" height="60" fill="none" stroke="var(--text)" strokeWidth="10" />
+                <line x1="15" y1="50" x2="205" y2="50" stroke="var(--accent)" strokeWidth="1.5" />
+                <text x="110" y="45" textAnchor="middle" fontSize="11" fill="var(--accent)">binnenmaat</text>
+                <line x1="5" y1="10" x2="215" y2="10" stroke="var(--text-3)" strokeWidth="1" />
+                <text x="110" y="8" textAnchor="middle" fontSize="10" fill="var(--text-3)">buitenmaat</text>
+              </svg>
+            </TermHelp>
+          </div>
+          <LengthField
+            label="Dikte buitenmuur"
+            value={s.wallDefaults.exterior}
+            min={150}
+            max={700}
+            hint={
+              <span className="inline-flex items-center gap-1">
+                Meestal 30 à 40 cm
+                <TermHelp term="Buitenmuur">
+                  <p>
+                    Een Belgische buitenmuur is meestal een spouwmuur: een binnenblad, isolatie en
+                    een gevelsteen. Samen is dat zo&apos;n 30 à 40 cm dik.
+                  </p>
+                  <p>Nieuwe muren krijgen deze dikte vanzelf; je kan ze per muur nog aanpassen.</p>
+                </TermHelp>
+              </span>
+            }
+            onCommit={(mm) => commit(setWallDefaults(s, { ...s.wallDefaults, exterior: mm }))}
+          />
+          <LengthField
+            label="Dikte binnenmuur"
+            value={s.wallDefaults.interior}
+            min={50}
+            max={400}
+            hint="Meestal 9 à 14 cm"
+            onCommit={(mm) => commit(setWallDefaults(s, { ...s.wallDefaults, interior: mm }))}
+          />
+        </Section>
+
+        <Section title="Waar ligt het noorden?">
+          <div className="flex items-center gap-3">
+            <Compass angle={s.northAngle} size={56} />
+            <div className="flex flex-col gap-1.5">
+              <div className="flex gap-1">
+                <IconButton
+                  size="sm"
+                  label="Noorden 15° naar links draaien"
+                  className="border border-line"
+                  onClick={() => store.execute(setNorth(s, s.northAngle - 15))}
+                >
+                  <RotateCcw size={16} />
+                </IconButton>
+                <IconButton
+                  size="sm"
+                  label="Noorden 15° naar rechts draaien"
+                  className="border border-line"
+                  onClick={() => store.execute(setNorth(s, s.northAngle + 15))}
+                >
+                  <RotateCw size={16} />
+                </IconButton>
+              </div>
+              <span className="tabular text-[12px] text-ink-3">{s.northAngle}° t.o.v. boven</span>
+            </div>
+          </div>
+          <p className="text-[12px] leading-relaxed text-ink-3">
+            Zo weten we later waar de zon binnenvalt. Twijfel je? Kijk op je gsm-kompas met de
+            telefoon in de richting van het plan.
+          </p>
+        </Section>
+
+        <Section title="Tekenhulp">
           <Toggle
             label="Magnetisch raster"
             hint="Alles wat je tekent, valt netjes op stappen van 5 cm."
-            checked={doc.settings.snapToGrid}
-            onChange={(v) =>
-              store.execute(changeSettings(doc.settings, { ...doc.settings, snapToGrid: v }))
-            }
+            checked={s.snapToGrid}
+            onChange={(v) => commit(setSnap(s, v))}
           />
-        </section>
+        </Section>
       </div>
     </aside>
   );

@@ -8,15 +8,41 @@
  * (naam, functie, vloerafwerking), gekoppeld aan hun muren.
  */
 
-export const SCHEMA_VERSION = 1;
+/**
+ * Versiegeschiedenis van het schema:
+ *  1 – verdiepingen, muren, openingen, ruimtes, meubels
+ *  2 – startkeuze, standaardmuren, maatafspraak, noordrichting
+ */
+export const SCHEMA_VERSION = 2;
 
 export type Id = string;
 
 export interface ProjectDoc {
   schemaVersion: typeof SCHEMA_VERSION;
   name: string;
+  /** Waarmee de gebruiker begon (welkomstvraag); stuurt de eerste stappen. */
+  start: StartChoice;
   settings: ProjectSettings;
   floors: Floor[];
+}
+
+export type StartChoice =
+  | { kind: "house" }
+  | { kind: "room"; width: number; depth: number; roomFunction: string }
+  | { kind: "trace" }
+  | { kind: "example" };
+
+/**
+ * Hoe maten op het plan gelezen worden.
+ *  - "inside": binnenmaten, van afgewerkte muur tot afgewerkte muur (zoals een leek meet)
+ */
+export type MeasureMode = "inside";
+
+export interface WallDefaults {
+  /** Buitenmuur (spouwmuur met isolatie), in mm. */
+  exterior: number;
+  /** Binnenmuur, in mm. */
+  interior: number;
 }
 
 export interface ProjectSettings {
@@ -24,6 +50,10 @@ export interface ProjectSettings {
   snapToGrid: boolean;
   /** Rasterstap in mm (standaard 50 = 5 cm). */
   gridSize: number;
+  measureMode: MeasureMode;
+  wallDefaults: WallDefaults;
+  /** Waar het noorden ligt, in graden met de klok mee vanaf "boven op het scherm". */
+  northAngle: number;
 }
 
 export interface Floor {

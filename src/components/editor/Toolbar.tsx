@@ -1,6 +1,6 @@
 "use client";
 
-import { Maximize, Minus, Plus, Printer, Redo2, Undo2 } from "lucide-react";
+import { Maximize, Minus, Plus, Redo2, Undo2 } from "lucide-react";
 import { IconButton } from "@/components/ui/Button";
 import { W } from "@/lib/words";
 
@@ -10,7 +10,10 @@ function Divider() {
   return <span className="mx-1 h-6 w-px bg-line" aria-hidden="true" />;
 }
 
-/** De kleine werkbalk bovenaan het tekenvlak. */
+/**
+ * De kleine werkbalk bovenaan het tekenvlak. Knoppen verschijnen pas wanneer
+ * ze iets doen (3D en afdrukken komen in latere stappen).
+ */
 export function Toolbar({
   canUndo,
   canRedo,
@@ -22,9 +25,6 @@ export function Toolbar({
   onZoomIn,
   onZoomOut,
   onFit,
-  mode,
-  onMode,
-  onPrint,
 }: {
   canUndo: boolean;
   canRedo: boolean;
@@ -36,9 +36,6 @@ export function Toolbar({
   onZoomIn: () => void;
   onZoomOut: () => void;
   onFit: () => void;
-  mode: "2d" | "3d";
-  onMode: (m: "2d" | "3d") => void;
-  onPrint: () => void;
 }) {
   const mod = isMac() ? "⌘" : "Ctrl+";
   return (
@@ -64,23 +61,6 @@ export function Toolbar({
         <Redo2 size={18} />
       </IconButton>
       <Divider />
-      <div className="flex rounded-[var(--radius-control)] bg-surface-2 p-0.5" role="radiogroup" aria-label="Weergave">
-        {(["2d", "3d"] as const).map((m) => (
-          <button
-            key={m}
-            type="button"
-            role="radio"
-            aria-checked={mode === m}
-            onClick={() => onMode(m)}
-            className={`h-7 rounded-[6px] px-3 text-[13px] font-medium ${
-              mode === m ? "border border-line bg-bg text-ink" : "text-ink-3 hover:text-ink"
-            }`}
-          >
-            {m.toUpperCase()}
-          </button>
-        ))}
-      </div>
-      <Divider />
       <IconButton size="sm" label="Uitzoomen (−)" onClick={onZoomOut}>
         <Minus size={18} />
       </IconButton>
@@ -97,12 +77,6 @@ export function Toolbar({
       </IconButton>
       <IconButton size="sm" label="Alles in beeld (0)" onClick={onFit} className="max-sm:hidden">
         <Maximize size={16} />
-      </IconButton>
-      <span className="contents max-sm:hidden">
-        <Divider />
-      </span>
-      <IconButton size="sm" label="Afdrukken" onClick={onPrint} className="max-sm:hidden">
-        <Printer size={18} />
       </IconButton>
     </div>
   );

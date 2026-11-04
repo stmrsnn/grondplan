@@ -9,14 +9,15 @@ import { Dialog } from "@/components/ui/Dialog";
 import { Field } from "@/components/ui/Field";
 import { useToast } from "@/components/ui/Toast";
 import { formatWhen } from "@/lib/format";
+import { readPreview } from "@/lib/model/preview";
 import {
   cleanName,
-  createProject,
   deleteProject,
   renameProject,
   type ProjectRow,
 } from "@/lib/projects";
 import { W } from "@/lib/words";
+import { NewProjectDialog } from "./NewProjectDialog";
 
 type Modal =
   | { kind: "new" }
@@ -55,17 +56,7 @@ export function ProjectList({ initial }: { initial: ProjectRow[] }) {
         </ul>
       )}
 
-      <NameDialog
-        open={modal?.kind === "new"}
-        title={W.newProject}
-        initial=""
-        confirm={W.add}
-        onClose={() => setModal(null)}
-        onSubmit={async (name) => {
-          const id = await createProject(name);
-          return `/projecten/${id}`;
-        }}
-      />
+      <NewProjectDialog open={modal?.kind === "new"} onClose={() => setModal(null)} />
       <NameDialog
         open={modal?.kind === "rename"}
         title="Project hernoemen"
@@ -136,15 +127,7 @@ function ProjectCard({
   return (
     <li className="group relative flex flex-col overflow-hidden rounded-[var(--radius-card)] border border-line bg-bg transition-colors hover:border-line-strong">
       <Link href={`/projecten/${project.id}`} className="flex flex-col">
-        <div
-          className="h-36 border-b border-line bg-canvas"
-          style={{
-            backgroundImage:
-              "linear-gradient(var(--grid-minor) 1px, transparent 1px), linear-gradient(90deg, var(--grid-minor) 1px, transparent 1px)",
-            backgroundSize: "16px 16px",
-          }}
-          aria-hidden="true"
-        />
+        <CardPreview raw={project.preview} />
         <div className="flex flex-col gap-0.5 px-4 py-3 pr-12">
           <span className="truncate text-[15px] font-medium text-ink">{project.name}</span>
           <span className="text-[13px] text-ink-3">Gewijzigd {formatWhen(project.updated_at)}</span>
@@ -327,5 +310,30 @@ function DeleteDialog({
       </p>
       {error && <p className="mt-2 text-danger">{error}</p>}
     </Dialog>
+  );
+}
+
+function CardPreview({ raw }: { raw: unknown }) {
+  const preview = readPreview(raw);
+  return (
+    <div
+      className="flex h-36 items-center justify-center border-b border-line bg-canvas"
+      style={{
+        backgroundImage:
+          "linear-gradient(var(--grid-minor) 1px, transparent 1px), linear-gradient(90deg, var(--grid-minor) 1px, transparent 1px)",
+        backgroundSize: "16px 16px",
+      }}
+      aria-hidden="true"
+    >
+      {preview ? (
+        <svg viewBox={`0 0 ${preview.w} ${preview.h}`} className="h-full w-full">
+          {preview.lines.map(([x1, y1, x2, y2, t], i) => (
+            <line key={i} x1={x1} y1={y1} x2={x2} y2={y2} stroke="var(--ink)" strokeWidth={t} strokeLinecap="square" />
+          ))}
+        </svg>
+      ) : (
+        <span className="rounded-full bg-bg px-3 py-1 text-[12px] text-ink-3">Nog leeg</span>
+      )}
+    </div>
   );
 }

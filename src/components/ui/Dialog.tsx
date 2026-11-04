@@ -1,7 +1,8 @@
 "use client";
 
 import { X } from "lucide-react";
-import { useEffect, useRef, type ReactNode } from "react";
+import { useEffect, useId, useRef, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import { W } from "@/lib/words";
 import { IconButton } from "./Button";
 
@@ -17,26 +18,29 @@ export interface DialogProps {
 
 /**
  * De enige pop-up van de app: altijd gecentreerd, sluit met Esc of het kruisje,
- * houdt de focus binnenin (native <dialog>).
+ * houdt de focus binnenin (native <dialog>). Ze wordt los van de pagina
+ * getekend, zodat een uitleg-pop-up in een formulier dat formulier niet stoort.
  */
-export function Dialog({ open, onClose, title, children, actions, width = 440 }: DialogProps) {
+export function Dialog(props: DialogProps) {
+  if (!props.open || typeof document === "undefined") return null;
+  return createPortal(<OpenDialog {...props} />, document.body);
+}
+
+function OpenDialog({ onClose, title, children, actions, width = 440 }: DialogProps) {
   const ref = useRef<HTMLDialogElement>(null);
+  const titleId = useId();
 
   useEffect(() => {
     const d = ref.current;
-    if (!d) return;
-    if (open && !d.open) {
-      d.showModal();
-      // de browser zet de focus op het kruisje; zet ze op het eerste invulveld
-      d.querySelector<HTMLElement>("input, textarea, select")?.focus();
-    }
-    if (!open && d.open) d.close();
-  }, [open]);
+    if (!d || d.open) return;
+    d.showModal();
+    // de browser zet de focus op het kruisje; zet ze op het eerste invulveld
+    d.querySelector<HTMLElement>("input, textarea, select")?.focus();
+  }, []);
 
   return (
     <dialog
       ref={ref}
-      onClose={onClose}
       onCancel={(e) => {
         e.preventDefault();
         onClose();
@@ -47,22 +51,20 @@ export function Dialog({ open, onClose, title, children, actions, width = 440 }:
       }}
       style={{ width: `min(${width}px, calc(100vw - 32px))` }}
       className="m-auto rounded-[var(--radius-card)] border border-line bg-bg p-0 text-ink shadow-[var(--shadow-float)]"
-      aria-labelledby="dialog-title"
+      aria-labelledby={titleId}
     >
-      {open && (
-        <div className="flex flex-col gap-4 p-5">
-          <div className="flex items-start justify-between gap-4">
-            <h2 id="dialog-title" className="pt-1.5 text-base font-semibold">
-              {title}
-            </h2>
-            <IconButton label={W.close} size="sm" onClick={onClose}>
-              <X size={18} />
-            </IconButton>
-          </div>
-          <div className="text-sm leading-relaxed text-ink-2">{children}</div>
-          {actions && <div className="flex justify-end gap-2 pt-1">{actions}</div>}
+      <div className="flex flex-col gap-4 p-5">
+        <div className="flex items-start justify-between gap-4">
+          <h2 id={titleId} className="pt-1.5 text-base font-semibold">
+            {title}
+          </h2>
+          <IconButton label={W.close} size="sm" onClick={onClose}>
+            <X size={18} />
+          </IconButton>
         </div>
-      )}
+        <div className="text-sm leading-relaxed text-ink-2">{children}</div>
+        {actions && <div className="flex justify-end gap-2 pt-1">{actions}</div>}
+      </div>
     </dialog>
   );
 }

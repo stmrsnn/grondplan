@@ -1,11 +1,27 @@
-import { SCHEMA_VERSION, type Floor, type ProjectDoc } from "./types";
+import {
+  SCHEMA_VERSION,
+  type Floor,
+  type ProjectDoc,
+  type ProjectSettings,
+  type StartChoice,
+} from "./types";
 
 export function newId(): string {
   return globalThis.crypto.randomUUID();
 }
 
 export const DEFAULT_FLOOR_HEIGHT = 2600;
-export const DEFAULT_STOREY = 2900; // vloer tot vloer, incl. vloerpakket
+/** Vloer tot vloer: plafondhoogte + vloerpakket en draagvloer. */
+export const DEFAULT_STOREY = 2900;
+
+/** Gangbare Belgische diktes: spouwmuur met isolatie en een gewone binnenmuur. */
+export const DEFAULT_SETTINGS: ProjectSettings = {
+  snapToGrid: true,
+  gridSize: 50,
+  measureMode: "inside",
+  wallDefaults: { exterior: 350, interior: 100 },
+  northAngle: 0,
+};
 
 export function createFloor(name: string, elevation = 0): Floor {
   return {
@@ -21,18 +37,37 @@ export function createFloor(name: string, elevation = 0): Floor {
   };
 }
 
-export function createDoc(name: string): ProjectDoc {
+export function createDoc(name: string, start: StartChoice = { kind: "house" }): ProjectDoc {
   return {
     schemaVersion: SCHEMA_VERSION,
     name,
-    settings: { snapToGrid: true, gridSize: 50 },
+    start,
+    settings: structuredClone(DEFAULT_SETTINGS),
     floors: [createFloor("Gelijkvloers")],
   };
 }
 
+const isNum = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v);
+
+function migrateStart(raw: unknown): StartChoice {
+  const r = raw as Partial<StartChoice> | undefined;
+  if (r?.kind === "room") {
+    const room = r as Partial<Extract<StartChoice, { kind: "room" }>>;
+    if (isNum(room.width) && isNum(room.depth))
+      return {
+        kind: "room",
+        width: room.width,
+        depth: room.depth,
+        roomFunction: typeof room.roomFunction === "string" ? room.roomFunction : "living",
+      };
+  }
+  if (r?.kind === "trace" || r?.kind === "example") return { kind: r.kind };
+  return { kind: "house" };
+}
+
 /**
  * Zet een bewaard document om naar de huidige versie.
- * Elke toekomstige schemawijziging krijgt hier een stap (v1 → v2 → …).
+ * v1 → v2: startkeuze, standaardmuren, maatafspraak en noordrichting aangevuld.
  * Ontbrekende of kapotte velden worden aangevuld zodat de app nooit crasht.
  */
 export function migrateDoc(raw: unknown, fallbackName = "Naamloos project"): ProjectDoc {
@@ -45,10 +80,18 @@ export function migrateDoc(raw: unknown, fallbackName = "Naamloos project"): Pro
     );
   }
   const floors = Array.isArray(r.floors) && r.floors.length > 0 ? r.floors : base.floors;
+  const s = (r.settings ?? {}) as Partial<ProjectSettings>;
   return {
     schemaVersion: SCHEMA_VERSION,
     name: typeof r.name === "string" && r.name.trim() ? r.name : fallbackName,
-    settings: { ...base.settings, ...(r.settings ?? {}) },
+    start: migrateStart(r.start),
+    settings: {
+      ...DEFAULT_SETTINGS,
+      ...s,
+      measureMode: "inside",
+      wallDefaults: { ...DEFAULT_SETTINGS.wallDefaults, ...(s.wallDefaults ?? {}) },
+      northAngle: isNum(s.northAngle) ? normalizeAngle(s.northAngle) : 0,
+    },
     floors: floors.map((f, i) => ({
       ...createFloor(`Verdieping ${i}`),
       ...f,
@@ -56,9 +99,23 @@ export function migrateDoc(raw: unknown, fallbackName = "Naamloos project"): Pro
   };
 }
 
-/** Naam voor een nieuwe verdieping op basis van wat er al is. */
-export function nextFloorName(doc: ProjectDoc): string {
-  const n = doc.floors.length;
-  if (n === 0) return "Gelijkvloers";
-  return `${n}e verdieping`;
+export function normalizeAngle(deg: number): number {
+  return ((Math.round(deg) % 360) + 360) % 360;
+}
+
+/** Verdiepingen van onder naar boven. */
+export function floorsBottomUp(doc: ProjectDoc): Floor[] {
+  return [...doc.floors].sort((a, b) => a.elevation - b.elevation);
+}
+
+/** Naam voor een nieuwe verdieping op basis van het peil. */
+export function floorNameFor(doc: ProjectDoc, where: "above" | "below"): string {
+  const sorted = floorsBottomUp(doc);
+  if (where === "below") {
+    const basements = sorted.filter((f) => f.elevation < 0).length;
+    return basements === 0 ? "Kelder" : `Kelder ${basements + 1}`;
+  }
+  const above = sorted.filter((f) => f.elevation > 0).length;
+  if (sorted.length === 0) return "Gelijkvloers";
+  return `${above + 1}e verdieping`;
 }

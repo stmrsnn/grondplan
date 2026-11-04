@@ -11,6 +11,7 @@ export function SaveIndicator({ status }: { status: SaveStatus }) {
     dirty: { icon: <Loader2 size={14} className="opacity-0" />, text: W.unsaved, cls: "text-ink-3" },
     saving: { icon: <Loader2 size={14} className="animate-spin" />, text: W.saving, cls: "text-ink-3" },
     error: { icon: <AlertCircle size={14} />, text: W.saveError, cls: "text-danger" },
+    conflict: { icon: <AlertCircle size={14} />, text: "Elders gewijzigd", cls: "text-danger" },
   }[status];
   return (
     <span

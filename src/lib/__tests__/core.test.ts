@@ -3,9 +3,10 @@ import { formatArea, formatLength, formatMeters, formatNumber, formatWhen, parse
 import { area, bounds, centroid, signedArea } from "../geometry/polygon";
 import { closestOnSegment, snapPoint, snapValue } from "../geometry/vec";
 import { History } from "../history/history";
-import { addFloor, removeFloor, renameProject, updateFloor } from "../model/commands";
+import { addFloor, removeFloor, renameProject, restoreVersion, setNorth, updateFloor } from "../model/commands";
 import { createDoc, migrateDoc } from "../model/doc";
-import { Autosaver, type SaveStatus } from "../editor/autosave";
+import { Autosaver, SaveConflict, type SaveStatus } from "../editor/autosave";
+import { makePreview, readPreview } from "../model/preview";
 import { EditorStore } from "../editor/store";
 import {
   BASE_ZOOM,
@@ -172,13 +173,79 @@ describe("ongedaan maken", () => {
     expect(d.floors).toHaveLength(2);
     expect(d.floors[1].elevation).toBe(2900);
     expect(d.floors[1].name).toBe("1e verdieping");
-    d = h.execute(d, updateFloor(floorId, { height: 2600 }, { height: 2500 }));
+    d = h.execute(d, updateFloor(floorId, { height: 2600 }, { height: 2500 }, "1e verdieping"));
     expect(d.floors[1].height).toBe(2500);
     d = h.execute(d, removeFloor(d, floorId)!);
     expect(d.floors).toHaveLength(1);
     d = h.undo(d)!.doc;
     expect(d.floors[1].height).toBe(2500);
     expect(removeFloor({ ...d, floors: [d.floors[0]] }, d.floors[0].id)).toBeNull();
+  });
+});
+
+describe("verdiepingen, noorden en versies", () => {
+  it("voegt een kelder toe onder het gelijkvloers", () => {
+    const h = new History<ReturnType<typeof createDoc>>();
+    let d = createDoc("Huis");
+    d = h.execute(d, addFloor(d, "below").cmd);
+    const kelder = d.floors.find((f) => f.elevation < 0)!;
+    expect(kelder.name).toBe("Kelder");
+    expect(kelder.elevation).toBe(-2900);
+    d = h.execute(d, addFloor(d, "above").cmd);
+    expect(d.floors.find((f) => f.elevation === 2900)?.name).toBe("1e verdieping");
+  });
+  it("geeft meldingen in gewone taal", () => {
+    const h = new History<ReturnType<typeof createDoc>>();
+    let d = createDoc("Huis");
+    d = h.execute(d, addFloor(d).cmd);
+    const u = h.undo(d)!;
+    expect(u.message).toBe("1e verdieping weer weggehaald");
+    expect(h.redo(u.doc)!.message).toBe("1e verdieping terug toegevoegd");
+  });
+  it("draait het noorden rond binnen 0–359°", () => {
+    const h = new History<ReturnType<typeof createDoc>>();
+    let d = createDoc("Huis");
+    d = h.execute(d, setNorth(d.settings, -15));
+    expect(d.settings.northAngle).toBe(345);
+  });
+  it("versie terugzetten is zelf ongedaan te maken", () => {
+    const h = new History<ReturnType<typeof createDoc>>();
+    const a = createDoc("A");
+    const b = createDoc("B");
+    const d = h.execute(a, restoreVersion(a, b, "gisteren"));
+    expect(d.name).toBe("B");
+    expect(h.undo(d)!.doc.name).toBe("A");
+  });
+});
+
+describe("miniatuur", () => {
+  it("is leeg zonder muren en past een plan in het vak", () => {
+    const d = createDoc("Huis");
+    expect(makePreview(d)).toBeNull();
+    const f = d.floors[0];
+    f.nodes = [
+      { id: "a", x: 0, y: 0 },
+      { id: "b", x: 6000, y: 0 },
+      { id: "c", x: 6000, y: 4500 },
+    ];
+    f.walls = [
+      { id: "w1", start: "a", end: "b", thickness: 350, height: 2600, kind: "exterior", loadBearing: true },
+      { id: "w2", start: "b", end: "c", thickness: 350, height: 2600, kind: "exterior", loadBearing: true },
+    ];
+    const p = makePreview(d)!;
+    expect(p.lines).toHaveLength(2);
+    for (const [x1, y1, x2, y2] of p.lines) {
+      for (const x of [x1, x2]) {
+        expect(x).toBeGreaterThanOrEqual(0);
+        expect(x).toBeLessThanOrEqual(240);
+      }
+      for (const y of [y1, y2]) {
+        expect(y).toBeGreaterThanOrEqual(0);
+        expect(y).toBeLessThanOrEqual(144);
+      }
+    }
+    expect(readPreview(JSON.parse(JSON.stringify(p)))?.lines).toHaveLength(2);
+    expect(readPreview({ lines: [["<script>", 1, 2, 3, 4]] })).toBeNull();
   });
 });
 
@@ -190,15 +257,28 @@ describe("document", () => {
     expect(migrateDoc(null, "Leeg").name).toBe("Leeg");
     expect(() => migrateDoc({ schemaVersion: 99 })).toThrow();
   });
+  it("zet een v1-document om naar v2", () => {
+    const d = migrateDoc({ schemaVersion: 1, name: "Oud", settings: { snapToGrid: false, gridSize: 50 } });
+    expect(d.schemaVersion).toBe(2);
+    expect(d.start).toEqual({ kind: "house" });
+    expect(d.settings.snapToGrid).toBe(false);
+    expect(d.settings.wallDefaults).toEqual({ exterior: 350, interior: 100 });
+    expect(d.settings.northAngle).toBe(0);
+    expect(migrateDoc({ settings: { northAngle: -90 } }).settings.northAngle).toBe(270);
+  });
+  it("bewaart de startkeuze van een kamer", () => {
+    const d = migrateDoc({ start: { kind: "room", width: 6000, depth: 4500, roomFunction: "living" } });
+    expect(d.start).toEqual({ kind: "room", width: 6000, depth: 4500, roomFunction: "living" });
+  });
 });
 
 describe("editor", () => {
   it("meldt elke wijziging voor automatisch bewaren", () => {
     const s = new EditorStore(createDoc("A"));
     const seen: string[] = [];
-    s.onDocChange = (d) => seen.push(d.name);
+    s.listenToDoc((d) => seen.push(d.name));
     s.execute(renameProject("A", "B"));
-    expect(s.undo()).toBe("Projectnaam gewijzigd");
+    expect(s.undo()).toBe('Naam teruggezet naar "A"');
     expect(seen).toEqual(["B", "A"]);
     expect(s.getState().canRedo).toBe(true);
   });
@@ -213,6 +293,32 @@ describe("editor", () => {
 });
 
 describe("automatisch bewaren", () => {
+  it("overschrijft niets bij een conflict en wacht op de gebruiker", async () => {
+    vi.useFakeTimers();
+    const saved: number[] = [];
+    let conflict = true;
+    const a = new Autosaver<number>({
+      save: async (d) => {
+        if (conflict) throw new SaveConflict();
+        saved.push(d);
+      },
+      onStatus: () => {},
+      delayMs: 100,
+      retryMs: 100,
+    });
+    a.change(1);
+    await vi.advanceTimersByTimeAsync(150);
+    expect(a.current).toBe("conflict");
+    a.change(2);
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(saved).toEqual([]);
+    conflict = false;
+    await a.resume(2);
+    expect(saved).toEqual([2]);
+    expect(a.current).toBe("saved");
+    vi.useRealTimers();
+  });
+
   it("wacht tot de gebruiker stopt en bewaart de laatste versie", async () => {
     vi.useFakeTimers();
     const saved: number[] = [];

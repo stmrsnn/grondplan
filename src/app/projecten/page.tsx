@@ -20,7 +20,7 @@ export default async function ProjectsPage() {
 
   const { data, error } = await supabase
     .from("projects")
-    .select("id, name, updated_at")
+    .select("id, name, updated_at, preview")
     .order("updated_at", { ascending: false });
 
   return (

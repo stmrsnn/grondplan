@@ -15,6 +15,10 @@
 export interface Command<D> {
   /** Korte omschrijving in gewone taal, bv. "Verdieping toegevoegd". */
   label: string;
+  /** Melding na ongedaan maken, bv. "1e verdieping weer weggehaald". */
+  undoMessage?: string;
+  /** Melding na opnieuw doen, bv. "1e verdieping terug toegevoegd". */
+  redoMessage?: string;
   apply(doc: D): D;
   revert(doc: D): D;
   /** Commando's met dezelfde sleutel binnen het venster worden samengevoegd. */
@@ -30,6 +34,12 @@ export interface HistoryOptions {
   limit?: number;
   mergeWindowMs?: number;
   now?: () => number;
+}
+
+export interface Step<D> {
+  doc: D;
+  label: string;
+  message: string;
 }
 
 export class History<D> {
@@ -60,6 +70,8 @@ export class History<D> {
       const first = top.cmd;
       top.cmd = {
         label: cmd.label,
+        undoMessage: cmd.undoMessage,
+        redoMessage: cmd.redoMessage,
         mergeKey: cmd.mergeKey,
         apply: (d) => cmd.apply(first.apply(d)),
         revert: (d) => first.revert(cmd.revert(d)),
@@ -73,19 +85,27 @@ export class History<D> {
     return next;
   }
 
-  undo(doc: D): { doc: D; label: string } | null {
+  undo(doc: D): Step<D> | null {
     const e = this.undoStack.pop();
     if (!e) return null;
     this.redoStack.push(e);
-    return { doc: e.cmd.revert(doc), label: e.cmd.label };
+    return {
+      doc: e.cmd.revert(doc),
+      label: e.cmd.label,
+      message: e.cmd.undoMessage ?? `Teruggedraaid: ${e.cmd.label.toLowerCase()}`,
+    };
   }
 
-  redo(doc: D): { doc: D; label: string } | null {
+  redo(doc: D): Step<D> | null {
     const e = this.redoStack.pop();
     if (!e) return null;
     e.at = -Infinity; // nooit samenvoegen met een opnieuw gedane stap
     this.undoStack.push(e);
-    return { doc: e.cmd.apply(doc), label: e.cmd.label };
+    return {
+      doc: e.cmd.apply(doc),
+      label: e.cmd.label,
+      message: e.cmd.redoMessage ?? `Opnieuw: ${e.cmd.label.toLowerCase()}`,
+    };
   }
 
   /** Sluit de huidige samenvoeg-reeks af (bv. bij het loslaten van de muis). */

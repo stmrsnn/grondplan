@@ -14,7 +14,7 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 async function load(id: string) {
   if (!UUID.test(id)) return null;
   const supabase = await supabaseServer();
-  const { data } = await supabase.from("projects").select("id, name, data").eq("id", id).maybeSingle();
+  const { data } = await supabase.from("projects").select("id, name, data, revision").eq("id", id).maybeSingle();
   return data;
 }
 
@@ -43,7 +43,7 @@ export default async function ProjectPage({ params }: { params: Promise<{ id: st
 
   return (
     <ToastProvider>
-      <ProjectEditor id={row.id} initialDoc={doc} email={user.email} />
+      <ProjectEditor id={row.id} initialDoc={doc} revision={row.revision} email={user.email} />
     </ToastProvider>
   );
 }

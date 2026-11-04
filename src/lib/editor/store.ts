@@ -18,8 +18,7 @@ export class EditorStore {
   private history = new History<ProjectDoc>();
   private listeners = new Set<() => void>();
   private state: EditorState;
-  /** Wordt opgeroepen bij elke wijziging van het document (voor automatisch bewaren). */
-  onDocChange?: (doc: ProjectDoc) => void;
+  private onDocChange?: (doc: ProjectDoc) => void;
 
   constructor(doc: ProjectDoc) {
     this.state = this.compose(doc, doc.floors[0].id);
@@ -58,19 +57,29 @@ export class EditorStore {
     this.set(doc);
   }
 
-  /** Geeft de omschrijving terug van wat ongedaan gemaakt werd (voor een melding). */
+  /** Geeft een melding in gewone taal terug van wat er teruggedraaid werd. */
   undo(): string | null {
     const r = this.history.undo(this.state.doc);
     if (!r) return null;
     this.set(r.doc);
-    return r.label;
+    return r.message;
   }
 
   redo(): string | null {
     const r = this.history.redo(this.state.doc);
     if (!r) return null;
     this.set(r.doc);
-    return r.label;
+    return r.message;
+  }
+
+  /**
+   * Vervangt het document zonder ongedaan-maak-stap (bv. de versie uit een ander
+   * venster laden). De geschiedenis begint dan opnieuw.
+   */
+  reset(doc: ProjectDoc): void {
+    this.history = new History<ProjectDoc>();
+    this.state = this.compose(doc, this.state.activeFloorId);
+    this.listeners.forEach((l) => l());
   }
 
   /** Laat een functie weten wanneer het document verandert; geeft een opruimfunctie terug. */

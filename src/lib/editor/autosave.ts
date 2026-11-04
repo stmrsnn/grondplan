@@ -3,10 +3,20 @@
  * - wacht `delayMs` na de laatste wijziging (debounce), maar nooit langer dan `maxWaitMs`;
  * - nooit twee bewaaroperaties tegelijk; een wijziging tijdens het bewaren
  *   zorgt voor een nieuwe ronde erna;
- * - bij een fout: status "fout" en na `retryMs` opnieuw proberen.
+ * - bij een fout: status "error" en na `retryMs` opnieuw proberen;
+ * - bij een conflict (het project werd elders gewijzigd): status "conflict" en
+ *   wachten tot de gebruiker kiest. Er wordt dan niets overschreven.
  */
 
-export type SaveStatus = "saved" | "dirty" | "saving" | "error";
+export type SaveStatus = "saved" | "dirty" | "saving" | "error" | "conflict";
+
+/** Gooi deze fout uit `save` als het project ondertussen elders gewijzigd werd. */
+export class SaveConflict extends Error {
+  constructor() {
+    super("Het project werd ondertussen elders gewijzigd.");
+    this.name = "SaveConflict";
+  }
+}
 
 export interface AutosaveOptions<D> {
   save: (doc: D) => Promise<void>;
@@ -50,12 +60,29 @@ export class Autosaver<D> {
   /** Meld een nieuwe versie van het document. */
   change(doc: D): void {
     this.pending = doc;
+    if (this.status === "conflict") return; // eerst moet de gebruiker kiezen
     if (this.status !== "saving") this.setStatus("dirty");
     const now = Date.now();
     this.firstDirtyAt ??= now;
     const waited = now - this.firstDirtyAt;
     const delay = Math.max(0, Math.min(this.delayMs, this.maxWaitMs - waited));
     this.schedule(delay);
+  }
+
+  /** Na een conflict: de gebruiker koos om zijn versie toch te bewaren. */
+  resume(doc: D): Promise<void> {
+    this.pending = doc;
+    this.setStatus("dirty");
+    return this.flush();
+  }
+
+  /** Na een conflict: de gebruiker koos de andere versie; niets meer te bewaren. */
+  discard(): void {
+    this.pending = null;
+    this.firstDirtyAt = null;
+    if (this.timer) clearTimeout(this.timer);
+    this.timer = null;
+    this.setStatus("saved");
   }
 
   private schedule(delay: number) {
@@ -68,6 +95,7 @@ export class Autosaver<D> {
 
   /** Bewaar nu (bv. bij het verlaten van de pagina). */
   async flush(): Promise<void> {
+    if (this.status === "conflict") return;
     if (this.inFlight) {
       await this.inFlight;
       if (this.pending !== null && this.inFlight === null) return this.flush();
@@ -92,10 +120,14 @@ export class Autosaver<D> {
         } else {
           this.setStatus("saved");
         }
-      } catch {
+      } catch (err) {
         this.inFlight = null;
         // niets verliezen: de nieuwste versie blijft klaarstaan
         this.pending ??= doc;
+        if (err instanceof SaveConflict) {
+          this.setStatus("conflict");
+          return;
+        }
         this.setStatus("error");
         this.schedule(this.retryMs);
       }
