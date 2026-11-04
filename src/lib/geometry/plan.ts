@@ -263,6 +263,46 @@ const unit = (v: Vec): Vec => {
 const leftNormal = (d: Vec): Vec => ({ x: -d.y, y: d.x });
 
 /**
+ * Hoe ver het muurlichaam links en rechts van de lijn reikt (in de richting
+ * start → end). Een uitgelijnde muur kan aan één kant zelfs negatief reiken:
+ * dan ligt het hele lichaam aan de andere kant van de lijn.
+ */
+export function wallSides(w: Wall): { left: number; right: number } {
+  const o = w.offset ?? 0;
+  return { left: w.thickness / 2 + o, right: w.thickness / 2 - o };
+}
+
+/** Reikwijdte van de muur aan de linkerkant van een halve rand (from → to). */
+function leftExtent(w: Wall, fromId: Id): number {
+  const s = wallSides(w);
+  return fromId === w.start ? s.left : s.right;
+}
+
+/** Zet de uitlijning zo dat de muur `ext` mm reikt in richting `v` (vanaf de lijn). */
+function withExtentToward(w: Wall, a: Vec, b: Vec, v: Vec, ext: number, thickness = w.thickness): Wall {
+  const n = leftNormal(unit(sub(b, a)));
+  const o = Math.round(dot(n, v) > 0 ? ext - thickness / 2 : thickness / 2 - ext);
+  const { offset: _old, ...rest } = w;
+  void _old;
+  return o === 0 ? { ...rest, thickness } : { ...rest, thickness, offset: o };
+}
+
+/** Hoe ver de muur reikt in richting `v` (loodrecht op de muur). */
+function extentToward(w: Wall, a: Vec, b: Vec, v: Vec): number {
+  const n = leftNormal(unit(sub(b, a)));
+  const s = wallSides(w);
+  return dot(n, v) > 0 ? s.left : s.right;
+}
+
+/** De middellijn van het muurlichaam (voor aanklikken en voorbeeldjes). */
+export function wallBodyLine(w: Wall, a: Vec, b: Vec): [Vec, Vec] {
+  const o = w.offset ?? 0;
+  if (!o) return [a, b];
+  const n = scale(leftNormal(unit(sub(b, a))), o);
+  return [add(a, n), add(b, n)];
+}
+
+/**
  * De binnenkant van een ruimte: elke zijde schuift de halve muurdikte naar
  * binnen, hoeken worden opnieuw gesneden. Geeft per zijde ook de muur terug.
  */
@@ -271,14 +311,14 @@ export function innerPolygon(face: Face): { points: Vec[]; walls: Id[] } {
   const lines = face.edges.map((e) => {
     const d = unit(sub(e.to, e.from));
     const nrm = leftNormal(d);
-    return { p: add(e.from, scale(nrm, e.wall.thickness / 2)), d, nrm, e };
+    return { p: add(e.from, scale(nrm, leftExtent(e.wall, e.from.id))), d, nrm, e };
   });
   const points: Vec[] = [];
   for (let i = 0; i < n; i++) {
     const prev = lines[(i - 1 + n) % n];
     const cur = lines[i];
     const hit = lineIntersection(prev.p, prev.d, cur.p, cur.d);
-    points.push(hit ?? add(cur.e.from, scale(cur.nrm, cur.e.wall.thickness / 2)));
+    points.push(hit ?? cur.p);
   }
   return { points, walls: face.edges.map((e) => e.wall.id) };
 }
@@ -289,17 +329,18 @@ export function innerPolygon(face: Face): { points: Vec[]; walls: Id[] } {
  */
 export function wallPolygons(g: Graph): Map<Id, Vec[]> {
   const byId = new Map(g.nodes.map((n) => [n.id, n]));
-  type End = { wall: Wall; d: Vec; h: number; angle: number };
+  // hL/hR: hoe ver de muur links/rechts reikt, uitgaand vanaf het knooppunt bekeken
+  type End = { wall: Wall; d: Vec; hL: number; hR: number; angle: number };
   const ends = new Map<Id, End[]>();
   for (const w of g.walls) {
     const a = byId.get(w.start);
     const b = byId.get(w.end);
     if (!a || !b) continue;
     const d = unit(sub(b, a));
-    const h = w.thickness / 2;
-    (ends.get(a.id) ?? ends.set(a.id, []).get(a.id)!).push({ wall: w, d, h, angle: Math.atan2(d.y, d.x) });
+    const s = wallSides(w);
+    (ends.get(a.id) ?? ends.set(a.id, []).get(a.id)!).push({ wall: w, d, hL: s.left, hR: s.right, angle: Math.atan2(d.y, d.x) });
     const nd = scale(d, -1);
-    (ends.get(b.id) ?? ends.set(b.id, []).get(b.id)!).push({ wall: w, d: nd, h, angle: Math.atan2(nd.y, nd.x) });
+    (ends.get(b.id) ?? ends.set(b.id, []).get(b.id)!).push({ wall: w, d: nd, hL: s.right, hR: s.left, angle: Math.atan2(nd.y, nd.x) });
   }
   // per knooppunt en muur: hoek links (L) en rechts (R) van de muur, uitgaand bekeken
   const corners = new Map<string, { L: Vec; R: Vec }>();
@@ -310,21 +351,26 @@ export function wallPolygons(g: Graph): Map<Id, Vec[]> {
     for (let i = 0; i < k; i++) {
       const e = list[i];
       const l = leftNormal(e.d);
-      let L = add(p, scale(l, e.h));
-      let R = add(p, scale(l, -e.h));
+      let L = add(p, scale(l, e.hL));
+      let R = add(p, scale(l, -e.hR));
       if (k === 2) {
-        // gewone hoek: verstek
+        // gewone hoek: verstek (rechtdoor met een andere dikte: rechte afsluiting)
         const other = list[(i + 1) % k];
         const ol = leftNormal(other.d);
-        const hitL = lineIntersection(L, e.d, add(p, scale(ol, -other.h)), other.d);
-        const hitR = lineIntersection(R, e.d, add(p, scale(ol, other.h)), other.d);
-        const lim = 4 * Math.max(e.h, other.h);
+        const hitL = lineIntersection(L, e.d, add(p, scale(ol, -other.hR)), other.d);
+        const hitR = lineIntersection(R, e.d, add(p, scale(ol, other.hL)), other.d);
+        const lim = 4 * Math.max(e.hL, e.hR, other.hL, other.hR);
         if (hitL && length(sub(hitL, p)) <= lim) L = hitL;
         if (hitR && length(sub(hitR, p)) <= lim) R = hitR;
       } else if (k > 2) {
-        // T- of kruisaansluiting: elke muur loopt door tot de verste rand van de andere;
+        // T- of kruisaansluiting: elke muur loopt door tot de verste rand van de muren
+        // die er dwars op staan (en niet verder, anders steekt hij een kamer in);
         // overlappingen zijn onzichtbaar want alle muren hebben dezelfde kleur
-        const ext = Math.max(...list.filter((o) => o !== e).map((o) => o.h));
+        const v = scale(e.d, -1);
+        const reaches = list
+          .filter((o) => o !== e && Math.abs(cross(o.d, e.d)) > 1e-6)
+          .map((o) => (dot(leftNormal(o.d), v) > 0 ? o.hL : o.hR));
+        const ext = reaches.length ? Math.max(...reaches) : 0;
         L = add(L, scale(e.d, -ext));
         R = add(R, scale(e.d, -ext));
       }
@@ -558,6 +604,16 @@ export interface FloorAnalysis {
   totalArea: number;
 }
 
+/** Punten midden op een rechte zijde weglaten (die zijn geen echte hoek). */
+function dropCollinear(poly: Vec[]): Vec[] {
+  const out = poly.filter((p, i) => {
+    const a = poly[(i - 1 + poly.length) % poly.length];
+    const b = poly[(i + 1) % poly.length];
+    return Math.abs(cross(sub(p, a), sub(b, p))) > 1 || dot(sub(p, a), sub(b, p)) < 0;
+  });
+  return out.length >= 3 ? out : poly;
+}
+
 /** Een representatief punt binnen een veelhoek (voor het label). */
 function labelPoint(poly: Vec[]): Vec {
   // zwaartepunt, en als dat buiten valt: het midden van de langste horizontale doorsnede
@@ -619,7 +675,7 @@ function computeAnalysis(floor: Floor): FloorAnalysis {
   // het buitenvlak naar buiten verschuiven geeft de buitenkant van de gevels
   const outerContours = outer
     .filter((f) => f.edges.length >= 3 && Math.abs(f.signed) > 1)
-    .map((f) => innerPolygon(f).points);
+    .map((f) => dropCollinear(innerPolygon(f).points));
   const rooms: RoomInfo[] = bounded.map((f, i) => {
     const { points, walls } = innerPolygon(f);
     const key = [...walls].sort().join(",");
@@ -754,12 +810,9 @@ export function wallLength(floor: Floor, w: Wall): number {
 
 /**
  * Muurdikte aanpassen. Met een "ankerkamer" blijft de binnenmaat van die kamer
- * gelijk: de muur schuift dan opzij en enkel de kamer aan de andere kant
- * verandert. Zonder anker blijft de hartlijn liggen.
- *
- * Loopt de muur rechtdoor verder als een muur die niet verandert (bv. de
- * gedeelde muur is maar een stuk van een lange gevel), dan krijgt het plan op
- * dat punt een kleine sprong in plaats van een schuine muur.
+ * gelijk: de muur wordt enkel aan de andere kant dunner of dikker (de lijn
+ * blijft liggen, de uitlijning verandert). Zonder anker blijft het midden van
+ * de muur liggen.
  */
 export function setWallThickness(
   floor: Floor,
@@ -770,78 +823,103 @@ export function setWallThickness(
 ): Floor {
   const a = analyzeFloor(floor);
   const byId = new Map(floor.nodes.map((n) => [n.id, n]));
-  const targets = new Set(wallIds.filter((id) => floor.walls.find((w) => w.id === id && w.thickness !== thickness)));
-  // verschuiving per muur (langs zijn normaal)
-  const shiftOf = new Map<Id, Vec>();
-  for (const id of targets) {
-    const w = floor.walls.find((x) => x.id === id)!;
-    const roomId = typeof anchor === "function" ? anchor(id) : anchor;
+  const targets = new Set(wallIds);
+  const walls = floor.walls.map((w) => {
+    if (!targets.has(w.id) || w.thickness === thickness) return w;
+    const A = byId.get(w.start);
+    const B = byId.get(w.end);
+    if (!A || !B) return { ...w, thickness };
+    const roomId = typeof anchor === "function" ? anchor(w.id) : anchor;
     const room = roomId ? a.rooms.find((r) => r.room.id === roomId) : null;
-    if (!room) {
-      shiftOf.set(id, { x: 0, y: 0 });
-      continue;
-    }
-    const A = byId.get(w.start)!;
-    const B = byId.get(w.end)!;
-    const d = unit(sub(B, A));
-    let n = leftNormal(d);
+    if (!room) return { ...w, thickness };
+    // aan welke kant ligt de ankerkamer?
+    const n = leftNormal(unit(sub(B, A)));
     const mid = { x: (A.x + B.x) / 2, y: (A.y + B.y) / 2 };
-    if (!pointInPolygon(add(mid, scale(n, w.thickness / 2 + 5)), room.inner)) n = scale(n, -1);
-    shiftOf.set(id, scale(n, (w.thickness - thickness) / 2));
-  }
+    const s = wallSides(w);
+    const v = pointInPolygon(add(mid, scale(n, s.left + 5)), room.inner)
+      ? n
+      : pointInPolygon(add(mid, scale(n, -s.right - 5)), room.inner)
+        ? scale(n, -1)
+        : null;
+    if (!v) return { ...w, thickness };
+    return withExtentToward(w, A, B, v, extentToward(w, A, B, v), thickness);
+  });
+  return rebuildFloor({ ...floor, walls }, newId, floor);
+}
 
-  let nodes = [...floor.nodes];
-  let walls = floor.walls.map((w) => (targets.has(w.id) ? { ...w, thickness } : w));
-  const extraWalls: Wall[] = [];
-  for (const node of floor.nodes) {
-    const here = floor.walls.filter((w) => w.start === node.id || w.end === node.id);
-    const moved = here.filter((w) => targets.has(w.id));
-    if (moved.length === 0) continue;
-    // som van de verschuivingen, maar evenwijdige verschuivingen maar één keer
-    const vs: Vec[] = [];
-    for (const w of moved) {
-      const v = shiftOf.get(w.id)!;
-      if (!vs.some((u) => Math.abs(cross(u, v)) < 1e-6 && dot(u, v) > 0)) vs.push(v);
+/**
+ * "Magnetisch" plaatsen: een kamer die net naast een bestaande muur valt,
+ * schuift er exact tegenaan. Anders ontstaan er flinterdunne kamertjes en
+ * muren die net naast elkaar lopen.
+ *  - "move": de hele rechthoek schuift (maten blijven exact, bv. bij getypte
+ *    maten of een standaardkamer);
+ *  - "resize": elke zijde apart (bij een gesleepte rechthoek).
+ * `tol` is de maximale afstand tussen de lijnen in mm.
+ */
+export function snapRoomRect(
+  floor: Floor,
+  a: Vec,
+  b: Vec,
+  mode: "move" | "resize",
+  tol: number,
+): { a: Vec; b: Vec } {
+  let x0 = Math.min(a.x, b.x);
+  let x1 = Math.max(a.x, b.x);
+  let y0 = Math.min(a.y, b.y);
+  let y1 = Math.max(a.y, b.y);
+  const byId = new Map(floor.nodes.map((n) => [n.id, n]));
+  type L = { at: number; lo: number; hi: number };
+  const vert: L[] = [];
+  const hor: L[] = [];
+  for (const w of floor.walls) {
+    const p = byId.get(w.start);
+    const q = byId.get(w.end);
+    if (!p || !q) continue;
+    if (Math.abs(p.x - q.x) <= EPS) vert.push({ at: p.x, lo: Math.min(p.y, q.y), hi: Math.max(p.y, q.y) });
+    else if (Math.abs(p.y - q.y) <= EPS) hor.push({ at: p.y, lo: Math.min(p.x, q.x), hi: Math.max(p.x, q.x) });
+  }
+  // dichtste lijn bij een zijde, als die de zijde overlapt of er vlak naast eindigt
+  // (zo lijnt een keuken naast de living ook uit met de gevel van de living)
+  const nearest = (lines: L[], side: number, lo: number, hi: number): number | null => {
+    let best: number | null = null;
+    for (const l of lines) {
+      if (Math.min(l.hi, hi) - Math.max(l.lo, lo) < -tol) continue;
+      const d = l.at - side;
+      if (Math.abs(d) <= tol && (best === null || Math.abs(d) < Math.abs(best))) best = d;
     }
-    const v = vs.reduce((acc, u) => add(acc, u), { x: 0, y: 0 });
-    if (Math.hypot(v.x, v.y) < 0.5) continue;
-    const dirOf = (w: Wall) => {
-      const o = byId.get(w.start === node.id ? w.end : w.start)!;
-      return unit(sub(o, node));
-    };
-    // muren die rechtdoor verder lopen en zelf niet veranderen
-    const continuing = here.filter(
-      (w) => !targets.has(w.id) && moved.some((m) => Math.abs(cross(dirOf(m), dirOf(w))) < 1e-6),
-    );
-    const target = { x: Math.round(node.x + v.x), y: Math.round(node.y + v.y) };
-    if (continuing.length === 0) {
-      nodes = nodes.map((n) => (n.id === node.id ? { ...n, ...target } : n));
+    return best;
+  };
+  for (let pass = 0; pass < 2; pass++) {
+    const dl = nearest(vert, x0, y0, y1);
+    const dr = nearest(vert, x1, y0, y1);
+    const dt = nearest(hor, y0, x0, x1);
+    const db = nearest(hor, y1, x0, x1);
+    if (mode === "move") {
+      const dx = [dl, dr].filter((d): d is number => d !== null).sort((p, q) => Math.abs(p) - Math.abs(q))[0] ?? 0;
+      const dy = [dt, db].filter((d): d is number => d !== null).sort((p, q) => Math.abs(p) - Math.abs(q))[0] ?? 0;
+      x0 += dx;
+      x1 += dx;
+      y0 += dy;
+      y1 += dy;
     } else {
-      // sprong: nieuw knooppunt voor wat verschuift, een kort muurstuk ertussen
-      const nn = { id: newId(), ...target };
-      nodes.push(nn);
-      const keep = new Set(continuing.map((w) => w.id));
-      walls = walls.map((w) => {
-        if (keep.has(w.id)) return w;
-        if (w.start === node.id) return { ...w, start: nn.id };
-        if (w.end === node.id) return { ...w, end: nn.id };
-        return w;
-      });
-      const c = continuing[0];
-      extraWalls.push({ ...c, id: newId(), start: node.id, end: nn.id });
+      if (dl !== null) x0 += dl;
+      if (dr !== null) x1 += dr;
+      if (dt !== null) y0 += dt;
+      if (db !== null) y1 += db;
     }
   }
-  return rebuildFloor({ ...floor, nodes, walls: [...walls, ...extraWalls] }, newId, floor);
+  return { a: { x: x0, y: y0 }, b: { x: x1, y: y1 } };
 }
 
 /**
  * Een rechthoekige kamer plaatsen met binnenmaten zoals getekend of getypt.
  * Zijden die op een bestaande muur vallen, delen die muur: een buitenmuur wordt
- * dan een binnenmuur, de bestaande kamer blijft even groot en de nieuwe kamer
- * krijgt exact haar binnenmaat.
+ * dan een binnenmuur die enkel aan de kant van de nieuwe kamer dunner wordt.
+ * De bestaande kamer blijft dus even groot, de nieuwe kamer krijgt exact haar
+ * binnenmaat, en alle lijnen blijven recht (geen verspringingen).
  *
  * `a` en `b` zijn de hartlijnhoeken in de veronderstelling dat alle muren
- * `props.thickness` dik zijn (zo rekent het kamergereedschap).
+ * `props.thickness` dik en gecentreerd zijn (zo rekent het kamergereedschap).
  */
 export function placeRoom(
   floor: Floor,
@@ -856,54 +934,68 @@ export function placeRoom(
   let y0 = Math.min(a.y, b.y);
   let y1 = Math.max(a.y, b.y);
   const byId = new Map(floor.nodes.map((n) => [n.id, n]));
-  const tE = props.thickness;
-  /** Dikte van een bestaande muur op deze lijn, als die de zijde overlapt. */
-  const existingOn = (vertical: boolean, at: number, from: number, to: number): number | null => {
+  const h = props.thickness / 2;
+
+  /** Een gedeelde zijde: welke lijn, naar welke kant de bestaande kamer ligt, en de doelmaten. */
+  type Side = { vertical: boolean; at: number; out: Vec; keep: number; final: number; face: number };
+  const sideOn = (vertical: boolean, at: number, from: number, to: number, out: Vec): Side | null => {
     for (const w of floor.walls) {
       const p = byId.get(w.start);
       const q = byId.get(w.end);
       if (!p || !q) continue;
-      if (vertical) {
-        if (Math.abs(p.x - at) > EPS || Math.abs(q.x - at) > EPS) continue;
-        const lo = Math.min(p.y, q.y);
-        const hi = Math.max(p.y, q.y);
-        if (Math.min(hi, to) - Math.max(lo, from) > EPS) return w.thickness;
-      } else {
-        if (Math.abs(p.y - at) > EPS || Math.abs(q.y - at) > EPS) continue;
-        const lo = Math.min(p.x, q.x);
-        const hi = Math.max(p.x, q.x);
-        if (Math.min(hi, to) - Math.max(lo, from) > EPS) return w.thickness;
-      }
+      const on = vertical
+        ? Math.abs(p.x - at) <= EPS && Math.abs(q.x - at) <= EPS
+        : Math.abs(p.y - at) <= EPS && Math.abs(q.y - at) <= EPS;
+      if (!on) continue;
+      const lo = vertical ? Math.min(p.y, q.y) : Math.min(p.x, q.x);
+      const hi = vertical ? Math.max(p.y, q.y) : Math.max(p.x, q.x);
+      if (Math.min(hi, to) - Math.max(lo, from) <= EPS) continue;
+      // de bestaande kant houdt zijn reikwijdte; een buitenmuur wordt binnenmuur
+      const keep = extentToward(w, p, q, out);
+      const final = w.kind === "exterior" ? interiorThickness : w.thickness;
+      return { vertical, at, out, keep, final, face: final - keep };
     }
     return null;
   };
-  // eindtoestand van een gedeelde zijde: een buitenmuur wordt binnenmuur
-  const finalT = (tExisting: number) => (tExisting === tE ? interiorThickness : tExisting);
-  // hoeveel de kamer groeit langs een gedeelde zijde, en dus aan de overkant terug moet
-  const grow = (tExisting: number) => tE / 2 + tExisting / 2 - finalT(tExisting);
-  const left = existingOn(true, x0, y0, y1);
-  const right = existingOn(true, x1, y0, y1);
-  const top = existingOn(false, y0, x0, x1);
-  const bottom = existingOn(false, y1, x0, x1);
-  if (left !== null && right === null) x1 -= grow(left);
-  if (right !== null && left === null) x0 += grow(right);
-  if (top !== null && bottom === null) y1 -= grow(top);
-  if (bottom !== null && top === null) y0 += grow(bottom);
+  const left = sideOn(true, x0, y0, y1, { x: -1, y: 0 });
+  const right = sideOn(true, x1, y0, y1, { x: 1, y: 0 });
+  const top = sideOn(false, y0, x0, x1, { x: 0, y: -1 });
+  const bottom = sideOn(false, y1, x0, x1, { x: 0, y: 1 });
+  // de overkant opschuiven zodat de binnenmaat exact blijft
+  if (left && !right) x1 += left.face - h;
+  if (right && !left) x0 -= right.face - h;
+  if (top && !bottom) y1 += top.face - h;
+  if (bottom && !top) y0 -= bottom.face - h;
 
   const before = new Set(floor.rooms.map((r) => r.id));
-  let after = addRectangle(floor, { x: x0, y: y0 }, { x: x1, y: y1 }, props, newId);
+  const after = addRectangle(floor, { x: x0, y: y0 }, { x: x1, y: y1 }, props, newId);
   const fresh = after.rooms.find((r) => !before.has(r.id));
   if (!fresh) return { floor: after, roomId: null };
-  const shared = sharedWalls(after, fresh.id).filter((id) => after.walls.find((w) => w.id === id)?.thickness === tE);
-  if (shared.length) {
-    // de bestaande kamer aan de andere kant is het anker: zij blijft even groot
-    const owners = new Map<Id, Id>();
-    for (const r of after.rooms) if (r.id !== fresh.id) for (const w of r.walls) owners.set(w, r.id);
-    after = setWallThickness(after, shared, interiorThickness, (id) => owners.get(id) ?? null, newId);
-  }
-  const center = { x: (x0 + x1) / 2, y: (y0 + y1) / 2 };
-  const room = analyzeFloor(after).rooms.find((r) => pointInPolygon(center, r.inner));
-  return { floor: after, roomId: room?.room.id ?? fresh.id };
+  const sides = [left, right, top, bottom].filter((x): x is Side => x !== null);
+  if (sides.length === 0) return { floor: after, roomId: fresh.id };
+
+  const nodes = new Map(after.nodes.map((n) => [n.id, n]));
+  const freshWalls = new Set(fresh.walls);
+  const otherWalls = new Set(after.rooms.filter((r) => r.id !== fresh.id).flatMap((r) => r.walls));
+  const walls = after.walls.map((w) => {
+    if (!freshWalls.has(w.id)) return w;
+    const p = nodes.get(w.start)!;
+    const q = nodes.get(w.end)!;
+    for (const sd of sides) {
+      const on = sd.vertical
+        ? Math.abs(p.x - sd.at) <= EPS && Math.abs(q.x - sd.at) <= EPS
+        : Math.abs(p.y - sd.at) <= EPS && Math.abs(q.y - sd.at) <= EPS;
+      if (!on) continue;
+      if (otherWalls.has(w.id)) {
+        // gedeeld stuk: binnenmuur, de bestaande kamer houdt haar binnenvlak
+        return withExtentToward(w, p, q, sd.out, sd.keep, sd.final);
+      }
+      // stuk van dezelfde zijde dat niet gedeeld is: binnenvlak in lijn houden
+      return withExtentToward(w, p, q, sd.out, w.thickness - sd.face);
+    }
+    return w;
+  });
+  return { floor: rebuildFloor({ ...after, walls }, newId, after), roomId: fresh.id };
 }
 
 /** Muren die een ruimte delen met een andere ruimte. */

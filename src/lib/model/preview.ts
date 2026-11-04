@@ -1,3 +1,4 @@
+import { wallBodyLine } from "../geometry/plan";
 import { bounds } from "../geometry/polygon";
 import type { ProjectDoc } from "./types";
 
@@ -28,7 +29,9 @@ export function makePreview(doc: ProjectDoc): PlanPreview | null {
     .map((w) => {
       const a = nodes.get(w.start);
       const b = nodes.get(w.end);
-      return a && b ? { a, b, t: w.thickness } : null;
+      if (!a || !b) return null;
+      const [p, q] = wallBodyLine(w, a, b);
+      return { a: p, b: q, t: w.thickness };
     })
     .filter((s): s is NonNullable<typeof s> => s !== null)
     .slice(0, MAX_LINES);

@@ -125,7 +125,7 @@ export function snapPoint(raw: Vec, ctx: SnapContext): SnapResult {
     const b = byId.get(w.end);
     if (!a || !b || ctx.ignore?.has(w.start) || ctx.ignore?.has(w.end)) continue;
     const c = closestOnSegment(raw, a, b);
-    const reach = tol + w.thickness / 2;
+    const reach = tol + w.thickness / 2 + Math.abs(w.offset ?? 0);
     if (c.dist < reach && (!bestWall || c.dist < bestWall.d)) bestWall = { w, p: c.point, d: c.dist };
   }
   if (bestWall) {

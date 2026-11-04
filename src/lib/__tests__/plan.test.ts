@@ -212,7 +212,7 @@ describe("snelheid", () => {
   });
 });
 
-import { floorAreas, placeRoom, rebuildFloor, setWallThickness, sharedWalls, wallPolygons as polys2 } from "../geometry/plan";
+import { floorAreas, placeRoom, snapRoomRect, rebuildFloor, setWallThickness, sharedWalls, wallPolygons as polys2 } from "../geometry/plan";
 import { History } from "../history/history";
 import { updateFloor } from "../model/commands";
 import { createDoc } from "../model/doc";
@@ -245,6 +245,79 @@ describe("gedeelde muur", () => {
     // de gedeelde muur is nu 10 cm
     expect(f.walls.some((w) => w.thickness === 100)).toBe(true);
     expect(f.rooms).toHaveLength(2);
+  });
+
+  /** Geen "ladders": evenwijdige muurlijnen die net naast elkaar lopen. */
+  const noLadders = (f: Floor) => {
+    const segs = f.walls.map((w) => {
+      const a = f.nodes.find((n) => n.id === w.start)!;
+      const b = f.nodes.find((n) => n.id === w.end)!;
+      return { v: a.x === b.x, at: a.x === b.x ? a.x : a.y, lo: Math.min(a.x === b.x ? a.y : a.x, a.x === b.x ? b.y : b.x), hi: Math.max(a.x === b.x ? a.y : a.x, a.x === b.x ? b.y : b.x) };
+    });
+    for (const s1 of segs)
+      for (const s2 of segs) {
+        if (s1.v !== s2.v || s1.at === s2.at) continue;
+        if (Math.abs(s1.at - s2.at) < 300 && Math.min(s1.hi, s2.hi) - Math.max(s1.lo, s2.lo) > -300) return false;
+      }
+    return true;
+  };
+
+  it("vier kamers tegen elkaar (zoals in de praktijk): alles exact, recht en zonder verspringingen", () => {
+    const liv = placeRoom(empty(), { x: -175, y: -175 }, { x: 6175, y: 4675 }, P, 100, ids);
+    // keuken rechtsboven tegen de living
+    const k = placeRoom(liv.floor, { x: 6175, y: -175 }, { x: 6175 + 3500 + T, y: -175 + 3000 + T }, P, 100, ids);
+    // eetkamer 6 × 3,5 onder de living, vanaf de hoek linksonder
+    const e = placeRoom(k.floor, { x: -175, y: 4675 }, { x: -175 + 6000 + T, y: 4675 + 3500 + T }, P, 100, ids);
+    // badkamer 2,5 × 2 in de hoek onder de keuken en naast de living
+    const kb = analyzeFloor(e.floor).rooms.find((r) => r.room.id === k.roomId)!;
+    const corner = e.floor.nodes.find(
+      (n) => n.x === 6175 && Math.abs(n.y - Math.max(...kb.inner.map((p) => p.y)) - 175) <= 2,
+    )!;
+    expect(corner).toBeDefined();
+    const bad = placeRoom(e.floor, corner, { x: corner.x + 2500 + T, y: corner.y + 2000 + T }, P, 100, ids);
+    const f = bad.floor;
+    expect(dimsOf(f, liv.roomId!)).toEqual([6000, 4500]);
+    expect(dimsOf(f, k.roomId!)).toEqual([3500, 3000]);
+    expect(dimsOf(f, e.roomId!)).toEqual([6000, 3500]);
+    expect(dimsOf(f, bad.roomId!)).toEqual([2500, 2000]);
+    expect(f.rooms).toHaveLength(4);
+    expect(straight(f)).toBe(true);
+    expect(noLadders(f)).toBe(true);
+    // elke binnenkant is een echte rechthoek: elk punt ligt op de rand van de omhullende
+    for (const r of analyzeFloor(f).rooms) {
+      const xs = r.inner.map((p) => Math.round(p.x));
+      const ys = r.inner.map((p) => Math.round(p.y));
+      const [x0, x1, y0, y1] = [Math.min(...xs), Math.max(...xs), Math.min(...ys), Math.max(...ys)];
+      expect(xs.every((x, i) => x === x0 || x === x1 || ys[i] === y0 || ys[i] === y1)).toBe(true);
+      expect(Math.round(r.area / 1e3)).toBe(Math.round(((x1 - x0) * (y1 - y0)) / 1e3));
+    }
+    // gedeelde muren zijn 10 cm, gevels 35 cm
+    const a = analyzeFloor(f);
+    const outer = new Set(f.walls.filter((w) => w.kind === "exterior").map((w) => w.thickness));
+    expect([...outer]).toEqual([T]);
+    expect(f.walls.filter((w) => w.kind === "interior").every((w) => w.thickness === 100)).toBe(true);
+    expect(a.outerContours).toHaveLength(1);
+    // de buitenomtrek heeft enkel echte hoeken (voor nette kettingmaten)
+    expect(a.outerContours[0]).toHaveLength(8);
+    // geen enkele muur steekt een kamer in
+    for (const r of a.rooms) {
+      const xs = r.inner.map((p) => p.x);
+      const ys = r.inner.map((p) => p.y);
+      const [x0, x1, y0, y1] = [Math.min(...xs) + 1, Math.max(...xs) - 1, Math.min(...ys) + 1, Math.max(...ys) - 1];
+      for (const poly of a.wallPolys.values())
+        for (const p of poly) expect(p.x > x0 && p.x < x1 && p.y > y0 && p.y < y1).toBe(false);
+    }
+  });
+
+  it("een kamer die net naast een muur valt, schuift er exact tegenaan (geen flinterdun kamertje)", () => {
+    const liv = placeRoom(empty(), { x: -175, y: -175 }, { x: 6175, y: 4675 }, P, 100, ids);
+    // 17,5 cm te laag en 12 cm te ver naar rechts geklikt
+    const r = snapRoomRect(liv.floor, { x: 6295, y: 0 }, { x: 6295 + 3850, y: 3350 }, "move", 650);
+    expect(r.a).toEqual({ x: 6175, y: -175 });
+    expect(r.b).toEqual({ x: 6175 + 3850, y: 3175 });
+    const k = placeRoom(liv.floor, r.a, r.b, P, 100, ids);
+    expect(k.floor.rooms).toHaveLength(2);
+    expect(dimsOf(k.floor, k.roomId!)).toEqual([3500, 3000]);
   });
 
   it("muurdikte aanpassen houdt de gekozen kamer even groot", () => {

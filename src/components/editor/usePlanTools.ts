@@ -13,6 +13,8 @@ import {
   pointInPolygon,
   rebuildFloor,
   placeRoom,
+  snapRoomRect,
+  wallBodyLine,
   removeWalls,
   wallPolygons,
   type WallProps,
@@ -69,7 +71,8 @@ export function hitTest(floor: Floor, p: Vec, zoom: number): Selection {
     const a = byId.get(w.start);
     const b = byId.get(w.end);
     if (!a || !b) continue;
-    const c = closestOnSegment(p, a, b);
+    const [ba, bb] = wallBodyLine(w, a, b);
+    const c = closestOnSegment(p, ba, bb);
     if (c.dist < w.thickness / 2 + 4 / zoom && (!best || c.dist < best.d)) best = { id: w.id, d: c.dist };
   }
   if (best) return { kind: "wall", id: best.id };
@@ -234,7 +237,9 @@ export function usePlanTools({ store, doc, floor, view, selection, setSelection,
   );
 
   const commitRoom = useCallback(
-    (a: Vec, b: Vec, preset?: RoomTemplate) => {
+    (a0: Vec, b0: Vec, preset?: RoomTemplate, mode: "move" | "resize" = "move") => {
+      // net naast een bestaande muur? dan er exact tegenaan
+      const { a, b } = snapRoomRect(floor, a0, b0, mode, s.wallDefaults.exterior + 300);
       if (Math.abs(b.x - a.x) < 500 || Math.abs(b.y - a.y) < 500) {
         toast("Die kamer is te klein. Sleep een grotere rechthoek of typ de maten, bv. 4x3.");
         return;
@@ -338,7 +343,8 @@ export function usePlanTools({ store, doc, floor, view, selection, setSelection,
         const a = snap(e.world).p;
         const b = { x: a.x + template.w + t, y: a.y + template.d + t };
         if (e.phase === "hover" || e.phase === "move" || e.phase === "down") {
-          setPreview({ snap: snap(e.world), chain: null, rect: { a, b }, chip: { at: b, text: `${template.label} · ${formatMeters(template.w)} × ${formatMeters(template.d)}` } });
+          const r = snapRoomRect(floor, a, b, "move", t + 300);
+          setPreview({ snap: snap(e.world), chain: null, rect: r, chip: { at: r.b, text: `${template.label} · ${formatMeters(template.w)} × ${formatMeters(template.d)}` } });
           return true;
         }
         if (e.phase === "up") {
@@ -367,7 +373,7 @@ export function usePlanTools({ store, doc, floor, view, selection, setSelection,
           setPreview({
             snap: sr,
             chain: null,
-            rect: a ? { a, b: sr.p } : null,
+            rect: a ? snapRoomRect(floor, a, sr.p, "resize", s.wallDefaults.exterior + 300) : null,
             chip: a ? { at: sr.p, text: innerChip(a, sr.p) } : null,
           });
           return true;
@@ -377,7 +383,7 @@ export function usePlanTools({ store, doc, floor, view, selection, setSelection,
           const b = snap(e.world).p;
           if (a && (roomDragged.current || distance(a, b) * zoom > 6)) {
             if (roomDragged.current || preview.rect) {
-              commitRoom(a, b);
+              commitRoom(a, b, undefined, "resize");
               roomStart.current = null;
               setPreview({ snap: snap(e.world), chain: null, rect: null, chip: null });
             }

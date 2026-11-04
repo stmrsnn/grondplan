@@ -85,6 +85,12 @@ export interface Wall {
   start: Id; // Node.id
   end: Id; // Node.id
   thickness: number;
+  /**
+   * Uitlijning in mm: hoeveel het muurlichaam naar links (linkernormaal van
+   * start → end) verschoven ligt t.o.v. de lijn. 0 of afwezig = gecentreerd.
+   * Zo kan een muur aan één kant dunner worden zonder dat de lijn verspringt.
+   */
+  offset?: number;
   height: number;
   kind: WallKind;
   loadBearing: boolean;
