@@ -25,7 +25,11 @@ export function Dialog({ open, onClose, title, children, actions, width = 440 }:
   useEffect(() => {
     const d = ref.current;
     if (!d) return;
-    if (open && !d.open) d.showModal();
+    if (open && !d.open) {
+      d.showModal();
+      // de browser zet de focus op het kruisje; zet ze op het eerste invulveld
+      d.querySelector<HTMLElement>("input, textarea, select")?.focus();
+    }
     if (!open && d.open) d.close();
   }, [open]);
 
