@@ -1,0 +1,29 @@
+name: Controle
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  controle:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Typen en stijl
+        run: npx tsc --noEmit && npx eslint src
+      - name: Rekentesten
+        run: npm test
+      - name: Browser installeren
+        run: npx playwright install --with-deps chromium
+      - name: Browsertesten
+        run: npm run e2e
+        env:
+          NEXT_PUBLIC_SUPABASE_URL: https://ajpafmnaggyuwuanwyta.supabase.co
+          NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: sb_publishable_-7meA6tfjkWvWCyAzvUUtw_QMBEgAYX

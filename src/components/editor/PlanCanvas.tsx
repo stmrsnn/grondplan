@@ -28,6 +28,11 @@ export interface PlanCanvasProps {
    */
   onTool?: (e: ToolPointerEvent) => boolean;
   cursor?: string;
+  /**
+   * Bij tekenen met de vinger: het tekenpunt ligt zoveel pixels boven de
+   * vinger, zodat je ziet waar je tekent in plaats van je vinger.
+   */
+  touchOffset?: number;
   /** Getekend in wereldcoördinaten (schaalt mee). */
   children?: ReactNode;
   /** Getekend in schermcoördinaten (labels blijven scherp en even groot). */
@@ -45,7 +50,7 @@ type Pt = { x: number; y: number };
  *  - aanraakscherm: twee vingers = verschuiven en knijpen
  *  - al de rest gaat naar het actieve gereedschap; neemt dat niets over, dan verschuift het blad
  */
-export function PlanCanvas({ view, onViewChange, onResize, onTool, cursor, children, overlay }: PlanCanvasProps) {
+export function PlanCanvas({ view, onViewChange, onResize, onTool, cursor, touchOffset = 0, children, overlay }: PlanCanvasProps) {
   const ref = useRef<SVGSVGElement>(null);
   const viewRef = useRef(view);
   const pointers = useRef(new Map<number, Pt>());
@@ -119,14 +124,16 @@ export function PlanCanvas({ view, onViewChange, onResize, onTool, cursor, child
   const toolEvent = (phase: PointerPhase, e: React.PointerEvent | React.MouseEvent): ToolPointerEvent | null => {
     const v = viewRef.current;
     if (!v) return null;
-    const s = local(e);
+    const raw = local(e);
+    const pointerType = "pointerType" in e ? (e as React.PointerEvent).pointerType : "mouse";
+    const s = pointerType === "touch" && touchOffset ? { x: raw.x, y: raw.y - touchOffset } : raw;
     return {
       phase,
       world: toWorld(v, s),
       screen: s,
       shift: e.shiftKey,
       alt: e.altKey,
-      pointerType: "pointerType" in e ? (e as React.PointerEvent).pointerType : "mouse",
+      pointerType,
     };
   };
 

@@ -3,7 +3,7 @@
 import { MousePointer2, PenLine, Square } from "lucide-react";
 import { formatMeters } from "@/lib/format";
 import type { WallDefaults } from "@/lib/model/types";
-import type { Tool, WallChoice } from "./usePlanTools";
+import { ROOM_TEMPLATES, type RoomTemplate, type Tool, type WallChoice } from "./usePlanTools";
 
 const TOOLS: { id: Tool; label: string; key: string; icon: React.ReactNode; hint: string }[] = [
   { id: "select", label: "Selecteren", key: "V", icon: <MousePointer2 size={18} />, hint: "Klik om te kiezen, sleep om te verschuiven" },
@@ -22,6 +22,8 @@ export function ToolRail({
   setWallChoice,
   buffer,
   defaults,
+  template,
+  setTemplate,
 }: {
   tool: Tool;
   setTool: (t: Tool) => void;
@@ -29,6 +31,8 @@ export function ToolRail({
   setWallChoice: (w: WallChoice) => void;
   buffer: string;
   defaults: WallDefaults;
+  template: RoomTemplate | null;
+  setTemplate: (t: RoomTemplate | null) => void;
 }) {
   const active = TOOLS.find((t) => t.id === tool)!;
   return (
@@ -58,7 +62,30 @@ export function ToolRail({
 
       {tool !== "select" && (
         <div className="pointer-events-auto flex max-w-[260px] flex-col gap-2 rounded-[var(--radius-card)] border border-line bg-bg p-3 text-[12px] text-ink-2 shadow-[var(--shadow-float)]">
-          <span>{active.hint}</span>
+          <span>{template ? `Klik waar de linkerbovenhoek van de ${template.label.toLowerCase()} moet komen` : active.hint}</span>
+          {tool === "room" && (
+            <div className="flex flex-col gap-1.5">
+              <span className="text-[11px] font-medium uppercase tracking-wide text-ink-3">Standaardkamers</span>
+              <div className="flex flex-wrap gap-1">
+                {ROOM_TEMPLATES.map((t) => (
+                  <button
+                    key={t.label}
+                    type="button"
+                    aria-pressed={template?.label === t.label}
+                    onClick={() => setTemplate(t)}
+                    title={`${t.label}: ${formatMeters(t.w)} × ${formatMeters(t.d)}`}
+                    className={`rounded-full border px-2 py-0.5 text-[12px] ${
+                      template?.label === t.label
+                        ? "border-accent bg-accent text-on-accent"
+                        : "border-line text-ink hover:border-accent hover:bg-accent-soft"
+                    }`}
+                  >
+                    {t.label} <span className={template?.label === t.label ? "" : "text-ink-3"}>{(t.w / 1000).toLocaleString("nl-BE")}×{(t.d / 1000).toLocaleString("nl-BE")}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
           {tool === "wall" && (
             <div className="flex rounded-[var(--radius-control)] bg-surface-2 p-0.5" role="radiogroup" aria-label="Soort muur">
               {(["interior", "exterior"] as const).map((k) => (

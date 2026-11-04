@@ -4,7 +4,7 @@ import { memo, useMemo } from "react";
 import type { Guide, SnapResult } from "@/lib/editor/snap";
 import { toScreen, type Viewport } from "@/lib/editor/viewport";
 import { formatArea, formatMeters } from "@/lib/format";
-import type { FloorAnalysis, RoomInfo } from "@/lib/geometry/plan";
+import { roomCategory, type FloorAnalysis, type RoomInfo } from "@/lib/geometry/plan";
 import type { Vec } from "@/lib/geometry/vec";
 import type { Id } from "@/lib/model/types";
 
@@ -22,7 +22,7 @@ export const GhostFloor = memo(function GhostFloor({ analysis }: { analysis: Flo
   return (
     <g opacity={0.14} pointerEvents="none">
       {[...analysis.wallPolys.values()].map((poly, i) => (
-        <path key={i} d={path(poly)} fill="var(--wall)" />
+        <path key={i} d={path(poly)} fill="var(--wall-line)" />
       ))}
     </g>
   );
@@ -40,21 +40,44 @@ export const FloorLayer = memo(function FloorLayer({
 }) {
   const sel = (k: string, id: Id) => selection?.kind === k && selection.id === id;
   const hov = (k: string, id: Id) => hover?.kind === k && hover.id === id;
+  const walls = useMemo(() => [...analysis.wallPolys.values()].map(path).join(""), [analysis]);
+  const outline = useMemo(
+    () =>
+      [
+        ...analysis.rooms.map((r) => path(r.inner)),
+        ...analysis.outerContours.map(path),
+        ...analysis.looseWalls.map((id) => path(analysis.wallPolys.get(id) ?? [])),
+      ].join(""),
+    [analysis],
+  );
   return (
     <g>
       {analysis.rooms.map((r) => (
         <path
           key={r.room.id}
           d={path(r.inner)}
-          fill={sel("room", r.room.id) ? "var(--accent-soft)" : hov("room", r.room.id) ? "var(--surface-2)" : "var(--bg)"}
+          fill={
+            sel("room", r.room.id)
+              ? "var(--accent-soft)"
+              : `var(--room-${roomCategory(r.room.function)})`
+          }
         />
       ))}
+      {analysis.rooms.map((r) =>
+        hov("room", r.room.id) && !sel("room", r.room.id) ? (
+          <path key={`h-${r.room.id}`} d={path(r.inner)} fill="var(--accent)" opacity={0.06} />
+        ) : null,
+      )}
+      {/* Muren zoals een architect ze tekent: lichtgrijze vulling, exact op schaal,
+          met een fijne lijn precies óp de muurvlakken (binnenkant van elke kamer,
+          buitenkant van het gebouw), zodat de getekende dikte klopt. */}
+      <path d={walls} fill="var(--wall-fill)" />
       <path
-        d={[...analysis.wallPolys.values()].map(path).join("")}
-        fill="var(--wall)"
-        stroke="var(--wall)"
-        strokeWidth={1}
-        strokeLinejoin="round"
+        d={outline}
+        fill="none"
+        stroke="var(--wall-line)"
+        strokeWidth={1.25}
+        strokeLinejoin="miter"
         vectorEffect="non-scaling-stroke"
       />
       {[...analysis.wallPolys.entries()].map(([id, poly]) =>
@@ -202,8 +225,9 @@ export function Annotations({
   const onScreen = (p: Vec, m = 40) => p.x > -m && p.y > -m && p.x < W + m && p.y < H + m;
   for (const r of analysis.rooms) {
     const c = toScreen(view, r.center);
-    // binnenmaten per zijde
-    if (showDims) {
+    // binnenmaten per zijde, maar niet in kleine kamers (dan lopen ze over de naam)
+    const roomPx = Math.sqrt(r.area) * view.zoom;
+    if (showDims && roomPx > 120) {
       for (const [i, { a, b }] of (edges.get(r.room.id) ?? []).entries()) {
         const len = Math.hypot(b.x - a.x, b.y - a.y);
         if (len * view.zoom < 56) continue;
@@ -247,33 +271,64 @@ export function Annotations({
       </g>,
     );
   }
-  // buitenmaten bovenaan en links
+  // buitenmaten: deelmaten per gevelsprong en de totale maat, bovenaan en links
   const b = analysis.outerBounds;
-  if (b && showDims) {
-    const tl = toScreen(view, { x: b.minX, y: b.minY });
-    const br = toScreen(view, { x: b.maxX, y: b.maxY });
-    const y = tl.y - 28;
-    const x = tl.x - 28;
-    if (br.x - tl.x > 60)
+  if (b && showDims) out.push(<OuterDims key="outer" analysis={analysis} view={view} />);
+  return <g>{out}</g>;
+}
+
+/** Maatketting zoals op een bouwplan: deelmaten bij elke sprong, en het totaal erboven. */
+function OuterDims({ analysis, view }: { analysis: FloorAnalysis; view: Viewport }) {
+  const b = analysis.outerBounds!;
+  const pts = analysis.outerContours.flat();
+  const uniq = (vals: number[], lo: number, hi: number) =>
+    [...new Set(vals.map((v) => Math.round(v)).filter((v) => v >= lo - 1 && v <= hi + 1))].sort((x, y) => x - y);
+  const xs = uniq(pts.map((p) => p.x), b.minX, b.maxX);
+  const ys = uniq(pts.map((p) => p.y), b.minY, b.maxY);
+  const tl = toScreen(view, { x: b.minX, y: b.minY });
+  const br = toScreen(view, { x: b.maxX, y: b.maxY });
+  const out: React.ReactNode[] = [];
+  const chain = (vals: number[], horizontal: boolean, offset: number, key: string) => {
+    for (let i = 0; i + 1 < vals.length; i++) {
+      const s0 = toScreen(view, horizontal ? { x: vals[i], y: b.minY } : { x: b.minX, y: vals[i] });
+      const s1 = toScreen(view, horizontal ? { x: vals[i + 1], y: b.minY } : { x: b.minX, y: vals[i + 1] });
+      const len = vals[i + 1] - vals[i];
+      const px = horizontal ? s1.x - s0.x : s1.y - s0.y;
+      const line = horizontal ? { y: tl.y - offset } : { x: tl.x - offset };
       out.push(
-        <g key="outer-w" pointerEvents="none">
-          <line x1={tl.x} y1={y} x2={br.x} y2={y} stroke="var(--text-3)" />
-          <line x1={tl.x} y1={y - 5} x2={tl.x} y2={y + 5} stroke="var(--text-3)" />
-          <line x1={br.x} y1={y - 5} x2={br.x} y2={y + 5} stroke="var(--text-3)" />
-          <Chip at={{ x: (tl.x + br.x) / 2, y }} text={formatMeters(b.maxX - b.minX)} title="Buitenmaat" />
+        <g key={`${key}-${i}`} pointerEvents="none">
+          {horizontal ? (
+            <>
+              <line x1={s0.x} y1={line.y} x2={s1.x} y2={line.y} stroke="var(--text-3)" />
+              <line x1={s0.x} y1={line.y! - 4} x2={s0.x} y2={line.y! + 4} stroke="var(--text-3)" />
+              <line x1={s1.x} y1={line.y! - 4} x2={s1.x} y2={line.y! + 4} stroke="var(--text-3)" />
+              {px > 46 && <Chip at={{ x: (s0.x + s1.x) / 2, y: line.y! }} text={formatMeters(len)} title="Buitenmaat" />}
+            </>
+          ) : (
+            <>
+              <line x1={line.x} y1={s0.y} x2={line.x} y2={s1.y} stroke="var(--text-3)" />
+              <line x1={line.x! - 4} y1={s0.y} x2={line.x! + 4} y2={s0.y} stroke="var(--text-3)" />
+              <line x1={line.x! - 4} y1={s1.y} x2={line.x! + 4} y2={s1.y} stroke="var(--text-3)" />
+              {px > 46 && (
+                <g transform={`rotate(-90 ${line.x} ${(s0.y + s1.y) / 2})`}>
+                  <Chip at={{ x: line.x!, y: (s0.y + s1.y) / 2 }} text={formatMeters(len)} title="Buitenmaat" />
+                </g>
+              )}
+            </>
+          )}
         </g>,
       );
-    if (br.y - tl.y > 60)
-      out.push(
-        <g key="outer-h" pointerEvents="none">
-          <line x1={x} y1={tl.y} x2={x} y2={br.y} stroke="var(--text-3)" />
-          <line x1={x - 5} y1={tl.y} x2={x + 5} y2={tl.y} stroke="var(--text-3)" />
-          <line x1={x - 5} y1={br.y} x2={x + 5} y2={br.y} stroke="var(--text-3)" />
-          <g transform={`rotate(-90 ${x} ${(tl.y + br.y) / 2})`}>
-            <Chip at={{ x, y: (tl.y + br.y) / 2 }} text={formatMeters(b.maxY - b.minY)} title="Buitenmaat" />
-          </g>
-        </g>,
-      );
+    }
+  };
+  const hasStepsX = xs.length > 2;
+  const hasStepsY = ys.length > 2;
+  if (br.x - tl.x > 60) {
+    if (hasStepsX) chain(xs, true, 28, "dx");
+    chain([b.minX, b.maxX], true, hasStepsX ? 56 : 28, "tx");
+  }
+  if (br.y - tl.y > 60) {
+    if (hasStepsY) chain(ys, false, 28, "dy");
+    chain([b.minY, b.maxY], false, hasStepsY ? 56 : 28, "ty");
   }
   return <g>{out}</g>;
 }

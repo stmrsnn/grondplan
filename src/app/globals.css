@@ -30,6 +30,14 @@
   --grid-major: #d5dee8;
   --ink: #1f2933;
   --wall: #1f2933;
+  --wall-fill: #a7b1bc;
+  --wall-line: #1f2933;
+  --room-leven: #fdf4e3;
+  --room-slapen: #ebf1fd;
+  --room-nat: #e4f5f2;
+  --room-doorgang: #f3f4f6;
+  --room-berging: #eceef1;
+  --room-andere: #ffffff;
   --backdrop: rgb(15 20 26 / 0.35);
   --shadow: 0 1px 2px rgb(15 20 26 / 0.06), 0 8px 24px rgb(15 20 26 / 0.08);
 }
@@ -61,6 +69,14 @@
     --grid-major: #26313d;
     --ink: #e6eaef;
     --wall: #9aa5b1;
+    --wall-fill: #4b5663;
+    --wall-line: #c9d1da;
+    --room-leven: #2a2418;
+    --room-slapen: #1a2233;
+    --room-nat: #15282a;
+    --room-doorgang: #1a1f26;
+    --room-berging: #1d2228;
+    --room-andere: #0f141a;
     --backdrop: rgb(0 0 0 / 0.55);
     --shadow: 0 1px 2px rgb(0 0 0 / 0.3), 0 8px 24px rgb(0 0 0 / 0.35);
   }
@@ -92,6 +108,14 @@
   --grid-major: #26313d;
   --ink: #e6eaef;
   --wall: #9aa5b1;
+  --wall-fill: #4b5663;
+  --wall-line: #c9d1da;
+  --room-leven: #2a2418;
+  --room-slapen: #1a2233;
+  --room-nat: #15282a;
+  --room-doorgang: #1a1f26;
+  --room-berging: #1d2228;
+  --room-andere: #0f141a;
   --backdrop: rgb(0 0 0 / 0.55);
   --shadow: 0 1px 2px rgb(0 0 0 / 0.3), 0 8px 24px rgb(0 0 0 / 0.35);
 }

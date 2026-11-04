@@ -7,12 +7,12 @@ import type { Viewport } from "@/lib/editor/viewport";
 import { formatMeters, parseLength } from "@/lib/format";
 import {
   addPolyline,
-  addRectangle,
   analyzeFloor,
   moveNodes,
   ownWalls,
   pointInPolygon,
   rebuildFloor,
+  placeRoom,
   removeWalls,
   wallPolygons,
   type WallProps,
@@ -24,6 +24,24 @@ import type { ToolPointerEvent } from "./PlanCanvas";
 import type { Selection } from "./PlanLayers";
 
 export type Tool = "select" | "wall" | "room";
+
+/** Standaardkamer om te "stempelen": binnenmaten in mm en de functie. */
+export interface RoomTemplate {
+  label: string;
+  w: number;
+  d: number;
+  fn: string;
+}
+
+export const ROOM_TEMPLATES: RoomTemplate[] = [
+  { label: "Living", w: 6000, d: 4500, fn: "living" },
+  { label: "Keuken", w: 3500, d: 3000, fn: "keuken" },
+  { label: "Slaapkamer", w: 3500, d: 3000, fn: "slaapkamer" },
+  { label: "Kinderkamer", w: 3000, d: 3000, fn: "slaapkamer" },
+  { label: "Badkamer", w: 2500, d: 2000, fn: "badkamer" },
+  { label: "Toilet", w: 1000, d: 1500, fn: "toilet" },
+  { label: "Berging", w: 2000, d: 1500, fn: "berging" },
+];
 export type WallChoice = "exterior" | "interior";
 
 export interface ToolPreview {
@@ -90,6 +108,9 @@ export function usePlanTools({ store, doc, floor, view, selection, setSelection,
   }, []);
   const [hover, setHover] = useState<Selection>(null);
   const [buffer, setBuffer] = useState("");
+  const [template, setTemplateState] = useState<RoomTemplate | null>(null);
+  /** Net getekende kamer: daar tonen we meteen de functieknoppen. */
+  const [justDrawn, setJustDrawn] = useState<Id | null>(null);
 
   const chain = useRef<Vec[] | null>(null);
   const roomStart = useRef<Vec | null>(null);
@@ -120,9 +141,20 @@ export function usePlanTools({ store, doc, floor, view, selection, setSelection,
     (t: Tool) => {
       reset();
       setToolState(t);
+      setTemplateState(null);
+      setJustDrawn(null);
       if (t !== "select") setSelection(null);
     },
     [reset, setSelection],
+  );
+
+  const setTemplate = useCallback(
+    (tp: RoomTemplate | null) => {
+      reset();
+      setToolState("room");
+      setTemplateState((cur) => (tp && cur?.label === tp.label ? null : tp));
+    },
+    [reset],
   );
 
   // een andere verdieping of ongedaan maken: lopende tekenhandeling stoppen
@@ -202,16 +234,24 @@ export function usePlanTools({ store, doc, floor, view, selection, setSelection,
   );
 
   const commitRoom = useCallback(
-    (a: Vec, b: Vec) => {
+    (a: Vec, b: Vec, preset?: RoomTemplate) => {
       if (Math.abs(b.x - a.x) < 500 || Math.abs(b.y - a.y) < 500) {
         toast("Die kamer is te klein. Sleep een grotere rechthoek of typ de maten, bv. 4x3.");
         return;
       }
-      const before = new Set(floor.rooms.map((r) => r.id));
-      const after = addRectangle(floor, a, b, wallProps("exterior"));
-      commit(after, "Kamer getekend", "Kamer weer weggehaald", "Kamer terug getekend");
-      const fresh = after.rooms.find((r) => !before.has(r.id));
-      if (fresh) setSelection({ kind: "room", id: fresh.id });
+      // binnenmaten blijven exact; gedeelde muren worden binnenmuren, de buren blijven even groot
+      const placed = placeRoom(floor, a, b, wallProps("exterior"), s.wallDefaults.interior);
+      let after = placed.floor;
+      const fresh = placed.roomId ? after.rooms.find((r) => r.id === placed.roomId) : undefined;
+      if (fresh && preset) {
+        const id = fresh.id;
+        after = { ...after, rooms: after.rooms.map((r) => (r.id === id ? { ...r, name: preset.label, function: preset.fn } : r)) };
+      }
+      commit(after, preset ? `${preset.label} getekend` : "Kamer getekend", "Kamer weer weggehaald", "Kamer terug getekend");
+      if (fresh) {
+        setSelection({ kind: "room", id: fresh.id });
+        if (!preset) setJustDrawn(fresh.id);
+      }
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [floor, commit, toast, setSelection, s.wallDefaults],
@@ -287,6 +327,25 @@ export function usePlanTools({ store, doc, floor, view, selection, setSelection,
         }
         if (e.phase === "dblclick" || e.phase === "cancel") {
           chain.current = null;
+          setPreview(EMPTY);
+          return true;
+        }
+        return false;
+      }
+
+      if (tool === "room" && template) {
+        const t = s.wallDefaults.exterior;
+        const a = snap(e.world).p;
+        const b = { x: a.x + template.w + t, y: a.y + template.d + t };
+        if (e.phase === "hover" || e.phase === "move" || e.phase === "down") {
+          setPreview({ snap: snap(e.world), chain: null, rect: { a, b }, chip: { at: b, text: `${template.label} · ${formatMeters(template.w)} × ${formatMeters(template.d)}` } });
+          return true;
+        }
+        if (e.phase === "up") {
+          commitRoom(a, b, template);
+          return true;
+        }
+        if (e.phase === "cancel") {
           setPreview(EMPTY);
           return true;
         }
@@ -390,7 +449,7 @@ export function usePlanTools({ store, doc, floor, view, selection, setSelection,
         if (cur && d.moved && e.phase === "up") {
           const node = d.kind === "node";
           commit(
-            rebuildFloor(cur),
+            rebuildFloor(cur, undefined, d.base),
             node ? "Hoek verplaatst" : "Muur verschoven",
             node ? "Hoek teruggezet" : "Muur teruggezet",
             node ? "Hoek opnieuw verplaatst" : "Muur opnieuw verschoven",
@@ -400,7 +459,7 @@ export function usePlanTools({ store, doc, floor, view, selection, setSelection,
       }
       return false;
     },
-    [view, tool, floor, snap, grid, wallPreview, addSegment, innerChip, commitRoom, preview.rect, setSelection, commit, setDraft],
+    [view, tool, template, floor, snap, grid, wallPreview, addSegment, innerChip, commitRoom, preview.rect, setSelection, commit, setDraft, s.wallDefaults.exterior],
   );
 
   /* ---------------- toetsenbord ---------------- */
@@ -439,7 +498,7 @@ export function usePlanTools({ store, doc, floor, view, selection, setSelection,
         const n = floor.nodes.find((x) => x.id === id);
         if (n) moves.set(id, { x: n.x + dx, y: n.y + dy });
       }
-      commit(rebuildFloor(moveNodes(floor, moves)), "Verschoven", "Terug op de vorige plaats", "Opnieuw verschoven");
+      commit(rebuildFloor(moveNodes(floor, moves), undefined, floor), "Verschoven", "Terug op de vorige plaats", "Opnieuw verschoven");
     },
     [selection, floor, commit],
   );
@@ -466,7 +525,16 @@ export function usePlanTools({ store, doc, floor, view, selection, setSelection,
         return false;
       }
       if (k === "Escape") {
+        if (justDrawn) {
+          // enkel de vraag sluiten; het gereedschap blijft, zodat je meteen verder tekent
+          setJustDrawn(null);
+          return true;
+        }
         if (buffer) setBuffer("");
+        else if (template) {
+          setTemplateState(null);
+          setPreview(EMPTY);
+        }
         else if (chain.current || roomStart.current) {
           chain.current = null;
           roomStart.current = null;
@@ -492,7 +560,7 @@ export function usePlanTools({ store, doc, floor, view, selection, setSelection,
       }
       return false;
     },
-    [tool, buffer, applyBuffer, setTool, selection, deleteSelection, nudge, grid, setSelection],
+    [tool, buffer, applyBuffer, setTool, selection, deleteSelection, nudge, grid, setSelection, template, justDrawn],
   );
 
   const cursor = tool === "select" ? (hover ? "pointer" : "grab") : "crosshair";
@@ -510,6 +578,10 @@ export function usePlanTools({ store, doc, floor, view, selection, setSelection,
     onKey,
     cursor,
     deleteSelection,
+    template,
+    setTemplate,
+    justDrawn,
+    setJustDrawn,
   };
 }
 

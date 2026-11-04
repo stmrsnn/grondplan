@@ -15,8 +15,8 @@ import { Autosaver, type SaveStatus } from "@/lib/editor/autosave";
 import { EditorStore } from "@/lib/editor/store";
 import { DEFAULT_AREA, fitBounds, toScreen, zoomAt, zoomPercent, type Viewport } from "@/lib/editor/viewport";
 import { formatMeters, parseLength } from "@/lib/format";
-import { analyzeFloor, rebuildFloor, stretch, type RoomInfo } from "@/lib/geometry/plan";
-import { addFloor, editFloor, renameProject, restoreVersion } from "@/lib/model/commands";
+import { analyzeFloor, functionLabel, moveNodes, rebuildFloor, stretch, type RoomInfo } from "@/lib/geometry/plan";
+import { addFloor, editFloor, renameProject, restoreVersion, updateRoom } from "@/lib/model/commands";
 import { floorsBottomUp } from "@/lib/model/doc";
 import type { Vec } from "@/lib/geometry/vec";
 import type { Floor, ProjectDoc } from "@/lib/model/types";
@@ -181,13 +181,24 @@ export function Editor({ initialDoc, backend, email }: EditorProps) {
     const u = { x: (b.x - a.x) / len, y: (b.y - a.y) / len };
     const delta = L - len;
     if (Math.abs(delta) < 1) return;
-    const next = stretch(floor, u, b.x * u.x + b.y * u.y, delta);
+    const straight = Math.abs(u.x) < 1e-6 || Math.abs(u.y) < 1e-6;
+    let next: Floor | null;
+    if (straight) {
+      // recht: alles voorbij de muur schuift mee, zonder schuine muren te maken
+      next = stretch(floor, u, b.x * u.x + b.y * u.y, delta);
+    } else {
+      // schuin: enkel het eindpunt van deze muur schuift in de richting van de muur
+      const end = floor.nodes.reduce((best, n) =>
+        Math.hypot(n.x - b.x, n.y - b.y) < Math.hypot(best.x - b.x, best.y - b.y) ? n : best,
+      );
+      next = moveNodes(floor, new Map([[end.id, { x: end.x + u.x * delta, y: end.y + u.y * delta }]]));
+    }
     if (!next) {
       toast.show("Zo klein kan niet: er staat een muur in de weg.");
       return;
     }
     store.execute(
-      editFloor(floor, rebuildFloor(next), "Maat aangepast", `${room.room.name}: vorige maat teruggezet`, `${room.room.name}: nieuwe maat opnieuw toegepast`),
+      editFloor(floor, rebuildFloor(next, undefined, floor), "Maat aangepast", `${room.room.name}: vorige maat teruggezet`, `${room.room.name}: nieuwe maat opnieuw toegepast`),
     );
     store.seal();
     toast.show(`${room.room.name}: ${formatMeters(len)} → ${formatMeters(L)}`);
@@ -319,6 +330,7 @@ export function Editor({ initialDoc, backend, email }: EditorProps) {
             onResize={onResize}
             onTool={tools.onTool}
             cursor={tools.cursor}
+            touchOffset={tools.tool === "select" ? 0 : 56}
             overlay={(v) => (
               <>
                 <Annotations
@@ -375,6 +387,45 @@ export function Editor({ initialDoc, backend, email }: EditorProps) {
             )}
           </PlanCanvas>
 
+          {tools.justDrawn && view && (() => {
+            const info = analysis.rooms.find((r) => r.room.id === tools.justDrawn);
+            if (!info) return null;
+            const c = toScreen(view, info.center);
+            return (
+              <div
+                role="group"
+                aria-label="Wat voor ruimte is dit?"
+                className="absolute z-20 flex max-w-[300px] -translate-x-1/2 -translate-y-1/2 flex-wrap justify-center gap-1.5 rounded-[var(--radius-card)] border border-line bg-bg p-2 shadow-[var(--shadow-float)]"
+                style={{ left: c.x, top: c.y }}
+              >
+                <span className="w-full pb-0.5 text-center text-[12px] text-ink-3">Wat voor ruimte is dit?</span>
+                {(["living", "keuken", "eetkamer", "slaapkamer", "badkamer", "toilet", "hal", "berging"] as const).map((fn) => (
+                  <button
+                    key={fn}
+                    type="button"
+                    className="h-7 rounded-full border border-line px-2.5 text-[12px] text-ink hover:border-accent hover:bg-accent-soft"
+                    onClick={() => {
+                      store.execute(
+                        updateRoom(floor.id, info.room.id, { function: info.room.function, name: info.room.name }, { function: fn, name: functionLabel(fn) }),
+                      );
+                      store.seal();
+                      tools.setJustDrawn(null);
+                    }}
+                  >
+                    {functionLabel(fn)}
+                  </button>
+                ))}
+                <button
+                  type="button"
+                  className="h-7 rounded-full px-2.5 text-[12px] text-ink-3 hover:text-ink"
+                  onClick={() => tools.setJustDrawn(null)}
+                >
+                  Later
+                </button>
+              </div>
+            );
+          })()}
+
           {dimEdit && (
             <input
               autoFocus
@@ -400,6 +451,8 @@ export function Editor({ initialDoc, backend, email }: EditorProps) {
             setWallChoice={tools.setWallChoice}
             buffer={tools.buffer}
             defaults={doc.settings.wallDefaults}
+            template={tools.template}
+            setTemplate={tools.setTemplate}
           />
 
           <div className="pointer-events-none absolute inset-x-0 top-3 flex items-start justify-between gap-2 px-3">

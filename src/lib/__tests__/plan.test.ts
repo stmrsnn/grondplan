@@ -211,3 +211,124 @@ describe("snelheid", () => {
     expect(t1 - t0).toBeLessThan(150);
   });
 });
+
+import { floorAreas, placeRoom, rebuildFloor, setWallThickness, sharedWalls, wallPolygons as polys2 } from "../geometry/plan";
+import { History } from "../history/history";
+import { updateFloor } from "../model/commands";
+import { createDoc } from "../model/doc";
+
+describe("gedeelde muur", () => {
+  const T = 350;
+  const P = { thickness: T, height: 2600, kind: "exterior" as const, loadBearing: true };
+  const dimsOf = (f: Floor, id: string) => {
+    const r = analyzeFloor(f).rooms.find((x) => x.room.id === id)!;
+    const xs = r.inner.map((p) => p.x);
+    const ys = r.inner.map((p) => p.y);
+    return [Math.round(Math.max(...xs) - Math.min(...xs)), Math.round(Math.max(...ys) - Math.min(...ys))];
+  };
+  const straight = (f: Floor) =>
+    f.walls.every((w) => {
+      const a = f.nodes.find((n) => n.id === w.start)!;
+      const b = f.nodes.find((n) => n.id === w.end)!;
+      return a.x === b.x || a.y === b.y;
+    });
+
+  it("living 6 × 4,5 en daarnaast een minder diepe keuken 3,5 × 3: beide exact, geen schuine muren", () => {
+    // living met binnenmaat 6 × 4,5 m
+    const liv = placeRoom(empty(), { x: -175, y: -175 }, { x: 6175, y: 4675 }, P, 100, ids);
+    // keuken tegen de rechterbovenhoek (hartlijn van de living), binnenmaat 3,5 × 3
+    const k = placeRoom(liv.floor, { x: 6175, y: -175 }, { x: 6175 + 3500 + T, y: -175 + 3000 + T }, P, 100, ids);
+    const f = k.floor;
+    expect(dimsOf(f, liv.roomId!)).toEqual([6000, 4500]);
+    expect(dimsOf(f, k.roomId!)).toEqual([3500, 3000]);
+    expect(straight(f)).toBe(true);
+    // de gedeelde muur is nu 10 cm
+    expect(f.walls.some((w) => w.thickness === 100)).toBe(true);
+    expect(f.rooms).toHaveLength(2);
+  });
+
+  it("muurdikte aanpassen houdt de gekozen kamer even groot", () => {
+    let f = addRectangle(empty(), { x: 0, y: 0 }, { x: 4000, y: 4000 }, EXT, ids);
+    f = addRectangle(f, { x: 4000, y: 0 }, { x: 7000, y: 4000 }, EXT, ids);
+    const right = analyzeFloor(f).rooms.find((r) => r.center.x > 4000)!;
+    const before = analyzeFloor(f).rooms.map((r) => ({ x: r.center.x, a: m2(r.area) }));
+    const g = setWallThickness(f, sharedWalls(f, right.room.id), 100, right.room.id, ids);
+    const after = analyzeFloor(g).rooms;
+    const r2 = after.find((r) => r.room.id === right.room.id)!;
+    const l2 = after.find((r) => r.room.id !== right.room.id)!;
+    expect(m2(r2.area)).toBeCloseTo(before.find((b) => b.x > 4000)!.a, 2);
+    expect(m2(l2.area)).toBeCloseTo(before.find((b) => b.x < 4000)!.a + 0.2 * 3.7, 2);
+  });
+});
+
+describe("namen en openingen na grote wijzigingen", () => {
+  it("een ruimte houdt haar naam als al haar muren vervangen worden", () => {
+    let f = addRectangle(empty(), { x: 0, y: 0 }, { x: 4000, y: 4000 }, EXT, ids);
+    f = { ...f, rooms: [{ ...f.rooms[0], name: "Bureau", function: "bureau" }] };
+    // alle muren krijgen nieuwe id's (bv. na plakken), op dezelfde plaats
+    const fresh = { ...f, walls: f.walls.map((w) => ({ ...w, id: `n-${w.id}` })) };
+    const g = rebuildFloor(fresh, ids, f);
+    expect(g.rooms[0].name).toBe("Bureau");
+  });
+  it("een deur blijft aan het juiste stuk muur als de muur gesplitst wordt", () => {
+    let f = addPolyline(empty(), [{ x: 0, y: 0 }, { x: 6000, y: 0 }], EXT, ids);
+    const w = f.walls[0];
+    f = {
+      ...f,
+      openings: [{ id: "deur", wall: w.id, kind: "door", offset: 4500, width: 830, height: 2100, sillHeight: 0 }],
+    };
+    f = addPolyline(f, [{ x: 3000, y: 0 }, { x: 3000, y: 3000 }], INT, ids);
+    const o = f.openings[0];
+    const host = f.walls.find((x) => x.id === o.wall)!;
+    const a = f.nodes.find((n) => n.id === host.start)!;
+    expect(a.x + (f.nodes.find((n) => n.id === host.end)!.x > a.x ? o.offset : -o.offset)).toBe(4500);
+  });
+});
+
+describe("plafondhoogte en muren", () => {
+  it("muren volgen de plafondhoogte, ook bij ongedaan maken", () => {
+    const h = new History<ReturnType<typeof createDoc>>();
+    let d = createDoc("A", { kind: "room", width: 4000, depth: 3000, roomFunction: "living" });
+    const fl = d.floors[0];
+    d = h.execute(d, updateFloor(fl.id, { height: fl.height }, { height: 2800 }, fl.name));
+    expect(d.floors[0].walls.every((w) => w.height === 2800)).toBe(true);
+    d = h.undo(d)!.doc;
+    expect(d.floors[0].walls.every((w) => w.height === 2600)).toBe(true);
+  });
+});
+
+describe("oppervlaktes", () => {
+  it("telt garage en berging niet mee als bewoonbaar", () => {
+    let f = addRectangle(empty(), { x: 0, y: 0 }, { x: 4000, y: 4000 }, EXT, ids);
+    f = addRectangle(f, { x: 4000, y: 0 }, { x: 8000, y: 4000 }, EXT, ids);
+    f = { ...f, rooms: f.rooms.map((r, i) => ({ ...r, function: i === 0 ? "living" : "garage" })) };
+    const { total, habitable } = floorAreas(f);
+    expect(habitable).toBeLessThan(total);
+    expect(m2(habitable)).toBeCloseTo(m2(total) / 2, 1);
+  });
+  it("vindt de buitenomtrek van het gebouw", () => {
+    const f = addRectangle(empty(), { x: 0, y: 0 }, { x: 4000, y: 3000 }, EXT, ids);
+    const c = analyzeFloor(f).outerContours[0];
+    const xs = c.map((p) => Math.round(p.x));
+    expect(Math.min(...xs)).toBe(-150);
+    expect(Math.max(...xs)).toBe(4150);
+  });
+});
+
+describe("op schaal", () => {
+  it("elke muur is in de tekening exact zo dik als opgegeven", () => {
+    let f = addRectangle(empty(), { x: 0, y: 0 }, { x: 5000, y: 4000 }, EXT, ids);
+    f = addPolyline(f, [{ x: 2000, y: 0 }, { x: 2000, y: 4000 }], INT, ids);
+    for (const [id, poly] of polys2(f)) {
+      const w = f.walls.find((x) => x.id === id)!;
+      const a = f.nodes.find((n) => n.id === w.start)!;
+      const b = f.nodes.find((n) => n.id === w.end)!;
+      const L = Math.hypot(b.x - a.x, b.y - a.y);
+      const nx = -(b.y - a.y) / L;
+      const ny = (b.x - a.x) / L;
+      // afstand van de veelhoekhoeken tot de hartlijn = halve dikte
+      const offs = poly.map((p) => Math.abs((p.x - a.x) * nx + (p.y - a.y) * ny));
+      for (const o of offs) expect(o).toBeCloseTo(w.thickness / 2, 6);
+    }
+  });
+});

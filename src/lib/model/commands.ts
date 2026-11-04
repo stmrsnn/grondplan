@@ -109,9 +109,18 @@ export function updateFloor(floorId: Id, from: FloorFields, to: FloorFields, flo
     redoMessage: `${floorName}: nieuwe ${what} opnieuw toegepast`,
     mergeKey: `floor:${floorId}:${keys.sort().join(",")}`,
     apply: (d) =>
-      mapFloor(d, floorId, (f) => (keys.every((k) => f[k] === to[k]) ? f : { ...f, ...to })),
-    revert: (d) => mapFloor(d, floorId, (f) => ({ ...f, ...from })),
+      mapFloor(d, floorId, (f) =>
+        keys.every((k) => f[k] === to[k]) ? f : withWallHeights({ ...f, ...to }, from.height, to.height),
+      ),
+    revert: (d) =>
+      mapFloor(d, floorId, (f) => withWallHeights({ ...f, ...from }, to.height, from.height)),
   };
+}
+
+/** Muren die de plafondhoogte volgden, volgen mee naar de nieuwe hoogte. */
+function withWallHeights(f: Floor, from?: number, to?: number): Floor {
+  if (from === undefined || to === undefined || from === to) return f;
+  return { ...f, walls: f.walls.map((w) => (w.height === from ? { ...w, height: to } : w)) };
 }
 
 /** Zet een eerdere versie terug als één stap die je ook weer ongedaan kan maken. */
