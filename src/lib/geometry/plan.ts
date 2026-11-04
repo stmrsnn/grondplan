@@ -560,7 +560,14 @@ export function rebuildFloor(floor: Floor, newId: IdGen = defaultId, previous?: 
       if (Math.abs(cross(d, pos.dir)) > 1e-3) continue;
       const c = closestPoint(pos.p, a, b);
       if (c.dist > EPS + 1 || c.t <= 0 || c.t >= 1) continue;
-      return [{ ...o, wall: w.id, offset: Math.round(length(sub(pos.p, a))) }];
+      const moved = { ...o, wall: w.id, offset: Math.round(length(sub(pos.p, a))) };
+      // muur in de andere richting: links/rechts en begin/einde wisselen
+      if (dot(d, pos.dir) < 0 && o.swing)
+        moved.swing = {
+          side: o.swing.side === "left" ? "right" : "left",
+          hinge: o.swing.hinge === "start" ? "end" : "start",
+        };
+      return [moved];
     }
     return [];
   });

@@ -5,6 +5,7 @@ import type { Guide, SnapResult } from "@/lib/editor/snap";
 import { toScreen, type Viewport } from "@/lib/editor/viewport";
 import { formatArea, formatMeters } from "@/lib/format";
 import { roomCategory, type FloorAnalysis, type RoomInfo } from "@/lib/geometry/plan";
+import type { OpeningShape } from "@/lib/geometry/openings";
 import type { Vec } from "@/lib/geometry/vec";
 import type { Id } from "@/lib/model/types";
 
@@ -15,6 +16,7 @@ export type Selection =
   | { kind: "wall"; id: Id }
   | { kind: "room"; id: Id }
   | { kind: "node"; id: Id }
+  | { kind: "opening"; id: Id }
   | null;
 
 /** De verdieping eronder, heel licht, als houvast bij het tekenen van een verdieping. */
@@ -93,6 +95,77 @@ export const FloorLayer = memo(function FloorLayer({
     </g>
   );
 });
+
+/**
+ * Deuren, ramen en doorgangen zoals op een bouwplan: de muur is onderbroken,
+ * met dagkanten; een deur heeft een blad en een kwartcirkel, een raam drie
+ * dunne lijnen (twee vlakken en het glas).
+ */
+export const OpeningsLayer = memo(function OpeningsLayer({
+  shapes,
+  selection,
+  hover,
+  ghost,
+}: {
+  shapes: OpeningShape[];
+  selection: Selection;
+  hover: Selection;
+  ghost: OpeningShape | null;
+}) {
+  return (
+    <g pointerEvents="none">
+      {shapes.map((sh) => (
+        <OpeningSymbol
+          key={sh.opening.id}
+          shape={sh}
+          state={
+            selection?.kind === "opening" && selection.id === sh.opening.id
+              ? "selected"
+              : hover?.kind === "opening" && hover.id === sh.opening.id
+                ? "hover"
+                : "normal"
+          }
+        />
+      ))}
+      {ghost && <OpeningSymbol shape={ghost} state="ghost" />}
+    </g>
+  );
+});
+
+const line = (a: Vec, b: Vec) => `M${a.x} ${a.y}L${b.x} ${b.y}`;
+
+function OpeningSymbol({ shape, state }: { shape: OpeningShape; state: "normal" | "hover" | "selected" | "ghost" }) {
+  const ink = state === "normal" || state === "hover" ? "var(--wall-line)" : "var(--accent)";
+  const leaf = shape.leaf;
+  return (
+    <g opacity={state === "ghost" ? 0.9 : 1}>
+      <path d={path(shape.cut)} fill="var(--canvas)" />
+      {state === "hover" && <path d={path(shape.cut)} fill="var(--accent)" opacity={0.25} />}
+      {/* het muurvlak loopt niet door in een deuropening */}
+      {shape.gaps.length > 0 && (
+        <path d={shape.gaps.map(([a, b]) => line(a, b)).join("")} stroke="var(--canvas)" strokeWidth={3} vectorEffect="non-scaling-stroke" />
+      )}
+      <path
+        d={[...shape.jambs, ...shape.lines].map(([a, b]) => line(a, b)).join("")}
+        stroke={ink}
+        strokeWidth={1}
+        vectorEffect="non-scaling-stroke"
+      />
+      {leaf && (
+        <>
+          <path d={line(leaf.hinge, leaf.tip)} stroke={ink} strokeWidth={1.75} vectorEffect="non-scaling-stroke" />
+          <path
+            d={`M${leaf.tip.x} ${leaf.tip.y}A${leaf.radius} ${leaf.radius} 0 0 ${leaf.sweep} ${leaf.to.x} ${leaf.to.y}`}
+            fill="none"
+            stroke={ink}
+            strokeWidth={0.75}
+            vectorEffect="non-scaling-stroke"
+          />
+        </>
+      )}
+    </g>
+  );
+}
 
 /** Voorvertoning tijdens het tekenen: hulplijnen en het magneetpunt. */
 export function Guides({ guides, view }: { guides: Guide[]; view: Viewport }) {

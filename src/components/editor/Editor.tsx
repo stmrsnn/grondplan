@@ -26,7 +26,8 @@ import type { EditorBackend } from "./backend";
 import { Compass } from "./NorthArrow";
 import { PropertiesPanel } from "./Panels";
 import { PlanCanvas } from "./PlanCanvas";
-import { Annotations, Chip, FloorLayer, GhostFloor, Guides, SnapMarker, type Selection } from "./PlanLayers";
+import { Annotations, Chip, FloorLayer, GhostFloor, Guides, OpeningsLayer, SnapMarker, type Selection } from "./PlanLayers";
+import { openingMarks, openingShape, type OpeningShape } from "@/lib/geometry/openings";
 import { ToolRail } from "./ToolRail";
 import { chainPolygons, usePlanTools } from "./usePlanTools";
 import { SaveIndicator } from "./SaveIndicator";
@@ -146,6 +147,16 @@ export function Editor({ initialDoc, backend, email }: EditorProps) {
     [setTool],
   );
   const analysis = useMemo(() => analyzeFloor(shownFloor), [shownFloor]);
+  const openingShapes = useMemo(
+    () => shownFloor.openings.map((o) => openingShape(shownFloor, o)).filter((x): x is OpeningShape => x !== null),
+    [shownFloor],
+  );
+  const ghostOpening = tools.preview.opening ? openingShape(floor, tools.preview.opening) : null;
+  // maten bij de deur of het raam dat je plaatst, versleept of geselecteerd hebt
+  const markedOpening =
+    tools.preview.opening ??
+    (selection?.kind === "opening" ? shownFloor.openings.find((o) => o.id === selection.id) ?? null : null);
+  const marks = markedOpening ? openingMarks(tools.preview.opening ? floor : shownFloor, markedOpening) : [];
   const below = useMemo(() => {
     const sorted = floorsBottomUp(doc);
     const i = sorted.findIndex((f) => f.id === floor.id);
@@ -160,7 +171,9 @@ export function Editor({ initialDoc, backend, email }: EditorProps) {
         ? floor.rooms.some((r) => r.id === selection.id)
         : selection.kind === "wall"
           ? floor.walls.some((w) => w.id === selection.id)
-          : floor.nodes.some((n) => n.id === selection.id);
+          : selection.kind === "opening"
+            ? floor.openings.some((o) => o.id === selection.id)
+            : floor.nodes.some((n) => n.id === selection.id);
     // eslint-disable-next-line react-hooks/set-state-in-effect -- verouderde selectie opruimen
     if (!exists) setSelection(null);
   }, [floor, selection]);
@@ -301,6 +314,12 @@ export function Editor({ initialDoc, backend, email }: EditorProps) {
             vanzelf. Muren lopen recht; houd Shift ingedrukt voor een schuine muur.
           </p>
           <p>
+            <strong className="text-ink">Deur (D) en raam (R):</strong> klik op een muur. Een deur
+            draait open naar de kant van je cursor, met de scharnieren bij de dichtste hoek. Kies
+            vooraf een breedte, of later in het paneel rechts. Sleep een deur of raam om het te
+            verschuiven, ook naar een andere muur.
+          </p>
+          <p>
             <strong className="text-ink">Maten aanpassen:</strong> klik op een maat in een kamer en
             typ de nieuwe. De muur ernaast schuift mee, net als de rest van het plan.
           </p>
@@ -336,7 +355,7 @@ export function Editor({ initialDoc, backend, email }: EditorProps) {
                 <Annotations
                   analysis={analysis}
                   view={v}
-                  showDims={!tools.draft && !moving}
+                  showDims={!tools.draft && !moving && marks.length === 0}
                   onEditEdge={(room, a, b, at) =>
                     setDimEdit({ room, a, b, at, value: formatMeters(Math.hypot(b.x - a.x, b.y - a.y)).replace(" m", "") })
                   }
@@ -354,6 +373,21 @@ export function Editor({ initialDoc, backend, email }: EditorProps) {
                     pointerEvents="none"
                   />
                 )}
+                {marks.map((m, i) => {
+                  const a = toScreen(v, m.from);
+                  const b = toScreen(v, m.to);
+                  const off = { x: m.out.x * 22, y: m.out.y * 22 };
+                  const mid = { x: (a.x + b.x) / 2 + off.x, y: (a.y + b.y) / 2 + off.y };
+                  if (Math.hypot(b.x - a.x, b.y - a.y) < 14) return null;
+                  return (
+                    <g key={`m${i}`} pointerEvents="none">
+                      <line x1={a.x + off.x} y1={a.y + off.y} x2={b.x + off.x} y2={b.y + off.y} stroke="var(--accent)" strokeWidth={1} />
+                      <line x1={a.x} y1={a.y} x2={a.x + off.x * 1.3} y2={a.y + off.y * 1.3} stroke="var(--accent)" strokeWidth={1} />
+                      <line x1={b.x} y1={b.y} x2={b.x + off.x * 1.3} y2={b.y + off.y * 1.3} stroke="var(--accent)" strokeWidth={1} />
+                      <Chip at={mid} text={formatMeters(m.len)} strong={m.kind === "width"} />
+                    </g>
+                  );
+                })}
                 {tools.preview.chip && tools.preview.chip.text && (
                   <Chip at={{ x: toScreen(v, tools.preview.chip.at).x + 44, y: toScreen(v, tools.preview.chip.at).y - 22 }} text={tools.preview.chip.text} strong />
                 )}
@@ -362,6 +396,7 @@ export function Editor({ initialDoc, backend, email }: EditorProps) {
           >
             {below && <GhostFloor analysis={below} />}
             <FloorLayer analysis={analysis} selection={selection} hover={tools.hover} />
+            <OpeningsLayer shapes={openingShapes} selection={selection} hover={tools.hover} ghost={ghostOpening} />
             {tools.preview.chain && (
               <g opacity={0.7}>
                 {chainPolygons(tools.preview.chain, tools.wallChoice === "exterior" ? doc.settings.wallDefaults.exterior : doc.settings.wallDefaults.interior).map((poly, i) => (
@@ -453,6 +488,10 @@ export function Editor({ initialDoc, backend, email }: EditorProps) {
             defaults={doc.settings.wallDefaults}
             template={tools.template}
             setTemplate={tools.setTemplate}
+            doorKind={tools.doorKind}
+            setDoorKind={tools.setDoorKind}
+            openingWidth={tools.openingWidth}
+            setOpeningWidth={tools.setOpeningWidth}
           />
 
           <div className="pointer-events-none absolute inset-x-0 top-3 flex items-start justify-between gap-2 px-3">

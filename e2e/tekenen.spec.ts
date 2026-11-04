@@ -168,3 +168,47 @@ test("tekenen met de vinger op een tablet @tablet", async ({ page }) => {
   await expect(page.locator("svg[role=application] text", { hasText: /^Slaapkamer$/ })).toBeVisible();
   await expect(page.locator("svg[role=application] text", { hasText: "10,5 m²" })).toBeVisible();
 });
+
+test("deur en raam plaatsen, aanpassen, verwijderen en terugzetten", async ({ page }) => {
+  const box = await canvas(page);
+  await page.keyboard.press("k");
+  await page.mouse.click(box.x + 600, box.y + 200);
+  await page.mouse.move(box.x + 800, box.y + 400);
+  await page.keyboard.type("5x4");
+  await page.keyboard.press("Enter");
+  await page.keyboard.press("Escape");
+  const o = await page.evaluate(() => {
+    const p = [...document.querySelectorAll('svg[role=application] g[transform^="translate"] path')].find((x) => x.getAttribute("fill") === "var(--wall-fill)")!;
+    const r = p.getBoundingClientRect();
+    return { x0: r.x, x1: r.x + r.width, y0: r.y, y1: r.y + r.height, k: r.width / 5700 };
+  });
+  const arcs = () => page.evaluate(() => [...document.querySelectorAll("svg[role=application] path")].filter((p) => /A/.test(p.getAttribute("d") ?? "")).length);
+
+  // deur in de onderste gevel, cursor binnen
+  await page.keyboard.press("d");
+  const door = { x: o.x0 + 1500 * o.k, y: o.y1 - 175 * o.k - 8 };
+  await page.mouse.move(door.x, door.y);
+  await page.mouse.click(door.x, door.y);
+  expect(await arcs()).toBe(1);
+
+  // raam in de bovenste gevel
+  await page.keyboard.press("r");
+  await page.mouse.move(o.x0 + 3000 * o.k, o.y0 + 175 * o.k + 8);
+  await page.mouse.click(o.x0 + 3000 * o.k, o.y0 + 175 * o.k + 8);
+
+  // de deur selecteren en breder maken
+  await page.keyboard.press("v");
+  await page.mouse.click(door.x, o.y1 - 175 * o.k);
+  await expect(page.getByRole("heading", { name: "Deur" })).toBeVisible();
+  await page.getByRole("button", { name: "93 cm" }).click();
+  await expect(page.getByRole("textbox", { name: /^Breedte/ })).toHaveValue("0,93 m");
+
+  // verwijderen en terugzetten
+  await page.keyboard.press("Delete");
+  expect(await arcs()).toBe(0);
+  await page.keyboard.press("Control+z");
+  expect(await arcs()).toBe(1);
+
+  // de kamer blijft even groot: openingen veranderen de oppervlakte niet
+  expect(await overview(page)).toEqual(["Ruimte 1 20,0 m²", "Gelijkvloers 20,0 m²"]);
+});

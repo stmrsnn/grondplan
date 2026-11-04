@@ -1,6 +1,6 @@
 "use client";
 
-import { Trash2 } from "lucide-react";
+import { FlipHorizontal2, FlipVertical2, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/Button";
 import { Field, Toggle } from "@/components/ui/Field";
 import { TermHelp } from "@/components/ui/Help";
@@ -20,6 +20,15 @@ import { editFloor, updateRoom, updateWall } from "@/lib/model/commands";
 import type { Floor, ProjectDoc } from "@/lib/model/types";
 import { W } from "@/lib/words";
 import { LengthField } from "./LengthField";
+import {
+  cornerGaps,
+  OPENING_LABEL,
+  openingDefaults,
+  updateOpening,
+  wallFrame,
+  widthsFor,
+} from "@/lib/geometry/openings";
+import type { OpeningKind } from "@/lib/model/types";
 import type { Selection } from "./PlanLayers";
 
 const selectCls =
@@ -149,6 +158,10 @@ export function SelectionPanel({
         </Button>
       </section>
     );
+  }
+
+  if (selection.kind === "opening") {
+    return <OpeningPanel store={store} floor={floor} openingId={selection.id} onDelete={onDelete} />;
   }
 
   if (selection.kind === "wall") {
@@ -392,6 +405,138 @@ function WallPanel({
       </div>
       <Button size="sm" variant="ghost" icon={<Trash2 size={16} />} className="self-start text-danger! hover:text-danger!" onClick={onDelete}>
         Muur {W.remove.toLowerCase()}
+      </Button>
+    </section>
+  );
+}
+
+function OpeningPanel({
+  store,
+  floor,
+  openingId,
+  onDelete,
+}: {
+  store: EditorStore;
+  floor: Floor;
+  openingId: string;
+  onDelete: () => void;
+}) {
+  const o = floor.openings.find((x) => x.id === openingId);
+  const frame = o ? wallFrame(floor, o.wall) : null;
+  if (!o || !frame) return <p className="text-sm text-ink-3">Deze opening bestaat niet meer.</p>;
+  const label = OPENING_LABEL[o.kind];
+  const apply = (patch: Partial<typeof o>, what: string): string | void => {
+    const after = updateOpening(floor, o.id, patch);
+    if (!after) return "Past niet in deze muur";
+    store.execute(editFloor(floor, after, `${label}: ${what} aangepast`, `${label}: vorige ${what} teruggezet`, `${label}: ${what} opnieuw aangepast`));
+    store.seal();
+  };
+  const gaps = cornerGaps(frame, o.offset, o.width);
+  // in woorden: welke kant is het begin van de muur, zoals je het plan bekijkt
+  const horizontal = Math.abs(frame.d.x) >= Math.abs(frame.d.y);
+  const [startWord, endWord] = horizontal
+    ? frame.d.x > 0 ? ["links", "rechts"] : ["rechts", "links"]
+    : frame.d.y > 0 ? ["boven", "onder"] : ["onder", "boven"];
+  const swing = o.swing ?? { side: "left" as const, hinge: "start" as const };
+  const setKind = (kind: OpeningKind) => {
+    if (kind === o.kind) return;
+    const def = openingDefaults(kind, frame.wall.kind);
+    apply({ kind, height: def.height, sillHeight: def.sillHeight, width: kind === "window" || o.kind === "window" ? def.width : o.width }, "soort");
+  };
+
+  return (
+    <section className="flex flex-col gap-4">
+      <div className="flex items-center justify-between">
+        <h3 className="text-sm font-semibold">{label}</h3>
+        <span className="rounded-full bg-surface-2 px-2.5 py-0.5 text-[12px] text-ink-2">
+          In een {frame.wall.kind === "exterior" ? "buitenmuur" : "binnenmuur"}
+        </span>
+      </div>
+      <div className="flex rounded-[var(--radius-control)] bg-surface-2 p-0.5 text-[13px]" role="radiogroup" aria-label="Soort opening">
+        {(["door", "window", "passage"] as const).map((k) => (
+          <button
+            key={k}
+            type="button"
+            role="radio"
+            aria-checked={o.kind === k}
+            onClick={() => setKind(k)}
+            className={`h-8 flex-1 rounded-[6px] px-2 ${o.kind === k ? "border border-line bg-bg font-medium text-ink" : "text-ink-3 hover:text-ink"}`}
+          >
+            {OPENING_LABEL[k]}
+          </button>
+        ))}
+      </div>
+      <LengthField
+        label="Breedte"
+        value={o.width}
+        min={300}
+        max={6000}
+        hint={
+          <span className="inline-flex flex-wrap gap-1.5">
+            {widthsFor(o.kind).map((w) => (
+              <button
+                key={w}
+                type="button"
+                className={`tabular rounded-full border px-2 py-0.5 ${w === o.width ? "border-accent text-accent-ink" : "border-line hover:border-accent hover:text-accent-ink"}`}
+                onClick={() => apply({ width: w }, "breedte")}
+              >
+                {Math.round(w / 10)} cm
+              </button>
+            ))}
+          </span>
+        }
+        onCommit={(mm) => apply({ width: mm }, "breedte")}
+      />
+      <div className="grid grid-cols-2 gap-2">
+        {/* links of boven altijd eerst, zoals je het plan leest */}
+        {(() => {
+          const startField = (
+            <LengthField key="s" label={`Tot de hoek ${startWord}`} value={gaps.start} min={0} max={frame.len} onCommit={(mm) => apply({ offset: o.offset + (mm - gaps.start) }, "plaats")} />
+          );
+          const endField = (
+            <LengthField key="e" label={`Tot de hoek ${endWord}`} value={gaps.end} min={0} max={frame.len} onCommit={(mm) => apply({ offset: o.offset - (mm - gaps.end) }, "plaats")} />
+          );
+          return startWord === "links" || startWord === "boven" ? [startField, endField] : [endField, startField];
+        })()}
+      </div>
+      <div className="grid grid-cols-2 gap-2">
+        <LengthField label="Hoogte" value={o.height} min={300} max={4000} onCommit={(mm) => apply({ height: mm }, "hoogte")} />
+        {o.kind === "window" && (
+          <LengthField
+            label="Borstwering"
+            value={o.sillHeight}
+            min={0}
+            max={3000}
+            hint="Van de vloer tot onder het raam"
+            onCommit={(mm) => apply({ sillHeight: mm }, "borstwering")}
+          />
+        )}
+      </div>
+      {o.kind === "door" && (
+        <div className="flex flex-col gap-1.5">
+          <span className="text-[13px] font-medium text-ink-2">Draairichting</span>
+          <div className="flex flex-wrap gap-2">
+            <Button
+              size="sm"
+              variant="secondary"
+              icon={<FlipVertical2 size={16} />}
+              onClick={() => apply({ swing: { ...swing, side: swing.side === "left" ? "right" : "left" } }, "draairichting")}
+            >
+              Andere kant opendraaien
+            </Button>
+            <Button
+              size="sm"
+              variant="secondary"
+              icon={<FlipHorizontal2 size={16} />}
+              onClick={() => apply({ swing: { ...swing, hinge: swing.hinge === "start" ? "end" : "start" } }, "scharnierkant")}
+            >
+              Scharnieren andere kant
+            </Button>
+          </div>
+        </div>
+      )}
+      <Button size="sm" variant="ghost" icon={<Trash2 size={16} />} className="self-start text-danger! hover:text-danger!" onClick={onDelete}>
+        {label} {W.remove.toLowerCase()}
       </Button>
     </section>
   );

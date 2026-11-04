@@ -18,7 +18,8 @@ export function LengthField({
 }: {
   label: string;
   value: number;
-  onCommit: (mm: number) => void;
+  /** Geeft eventueel een foutboodschap terug (bv. "past niet"). */
+  onCommit: (mm: number) => void | string;
   min: number;
   max: number;
   hint?: React.ReactNode;
@@ -44,7 +45,10 @@ export function LengthField({
     }
     setError(null);
     setText(formatMeters(mm));
-    if (mm !== value) onCommit(mm);
+    if (mm !== value) {
+      const err = onCommit(mm);
+      if (typeof err === "string") setError(err);
+    }
   };
 
   return (

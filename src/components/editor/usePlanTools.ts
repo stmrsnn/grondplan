@@ -19,13 +19,26 @@ import {
   wallPolygons,
   type WallProps,
 } from "@/lib/geometry/plan";
-import { closestOnSegment, distance, snapValue, type Vec } from "@/lib/geometry/vec";
+import {
+  addOpening,
+  cornerGaps,
+  fitOffset,
+  hitOpening,
+  openingDefaults,
+  OPENING_LABEL,
+  projectOnWall,
+  removeOpening,
+  snapOffset,
+  updateOpening,
+  wallFrame,
+} from "@/lib/geometry/openings";
+import { closestOnSegment, distance, dot, snapValue, type Vec } from "@/lib/geometry/vec";
 import { editFloor } from "@/lib/model/commands";
-import type { Floor, Id, ProjectDoc } from "@/lib/model/types";
+import type { Floor, Id, Opening, OpeningKind, ProjectDoc } from "@/lib/model/types";
 import type { ToolPointerEvent } from "./PlanCanvas";
 import type { Selection } from "./PlanLayers";
 
-export type Tool = "select" | "wall" | "room";
+export type Tool = "select" | "wall" | "room" | "door" | "window";
 
 /** Standaardkamer om te "stempelen": binnenmaten in mm en de functie. */
 export interface RoomTemplate {
@@ -54,6 +67,8 @@ export interface ToolPreview {
   rect: { a: Vec; b: Vec } | null;
   /** Tekst bij de cursor, bv. "3,25 m" of "4,00 × 3,00 m". */
   chip: { at: Vec; text: string } | null;
+  /** Deur of raam dat geplaatst zou worden. */
+  opening?: Opening | null;
 }
 
 const EMPTY: ToolPreview = { snap: null, chain: null, rect: null, chip: null };
@@ -65,6 +80,8 @@ export function hitTest(floor: Floor, p: Vec, zoom: number): Selection {
     // enkel hoeken van muren, niet elk tussenpunt van een rechte muur
     return { kind: "node", id: n.id };
   }
+  const o = hitOpening(floor, p, 4 / zoom);
+  if (o) return { kind: "opening", id: o.id };
   const byId = new Map(floor.nodes.map((n) => [n.id, n]));
   let best: { id: Id; d: number } | null = null;
   for (const w of floor.walls) {
@@ -112,13 +129,16 @@ export function usePlanTools({ store, doc, floor, view, selection, setSelection,
   const [hover, setHover] = useState<Selection>(null);
   const [buffer, setBuffer] = useState("");
   const [template, setTemplateState] = useState<RoomTemplate | null>(null);
+  /** Gekozen soort en breedte bij het deur- en raamgereedschap (null = vanzelf). */
+  const [doorKind, setDoorKind] = useState<"door" | "passage">("door");
+  const [openingWidth, setOpeningWidth] = useState<Record<OpeningKind, number | null>>({ door: null, window: null, passage: null });
   /** Net getekende kamer: daar tonen we meteen de functieknoppen. */
   const [justDrawn, setJustDrawn] = useState<Id | null>(null);
 
   const chain = useRef<Vec[] | null>(null);
   const roomStart = useRef<Vec | null>(null);
   const roomDragged = useRef(false);
-  const drag = useRef<{ kind: "node" | "wall"; id: Id; start: Vec; base: Floor; moved: boolean } | null>(null);
+  const drag = useRef<{ kind: "node" | "wall" | "opening"; id: Id; start: Vec; base: Floor; moved: boolean } | null>(null);
   const lastCursor = useRef<Vec | null>(null);
 
   const s = doc.settings;
@@ -311,6 +331,34 @@ export function usePlanTools({ store, doc, floor, view, selection, setSelection,
     return false;
   }, [buffer, tool, preview.snap, toast, addSegment, wallPreview, commitRoom, s.wallDefaults.exterior]);
 
+  /* ---------------- deuren en ramen ---------------- */
+
+  /** Waar zou een nieuwe deur of nieuw raam komen bij deze cursor? */
+  const openingAt = useCallback(
+    (p: Vec, kind: OpeningKind, zoom: number): Opening | null => {
+      const hit = projectOnWall(floor, p, 14 / zoom);
+      if (!hit) return null;
+      const { frame } = hit;
+      const def = openingDefaults(kind, frame.wall.kind);
+      const width = openingWidth[kind] ?? def.width;
+      const offset = fitOffset(floor, frame, width, snapOffset(frame, width, hit.along, grid ?? 50));
+      if (offset === null) return null;
+      const gaps = cornerGaps(frame, offset, width);
+      return {
+        id: "nieuw",
+        wall: frame.wall.id,
+        kind,
+        offset,
+        width,
+        height: def.height,
+        sillHeight: def.sillHeight,
+        // de deur draait open naar de kant van de cursor, scharnieren aan de dichtste hoek
+        swing: { side: hit.side, hinge: gaps.start <= gaps.end ? "start" : "end" },
+      };
+    },
+    [floor, openingWidth, grid],
+  );
+
   /* ---------------- aanwijzer ---------------- */
 
   const onTool = useCallback(
@@ -318,6 +366,35 @@ export function usePlanTools({ store, doc, floor, view, selection, setSelection,
       if (!view) return false;
       const zoom = view.zoom;
       lastCursor.current = e.world;
+
+      if (tool === "door" || tool === "window") {
+        const kind: OpeningKind = tool === "window" ? "window" : doorKind;
+        if (e.phase === "hover" || e.phase === "move" || e.phase === "down") {
+          const o = openingAt(e.world, kind, zoom);
+          setPreview({ snap: null, chain: null, rect: null, chip: null, opening: o });
+          return true;
+        }
+        if (e.phase === "up") {
+          const o = openingAt(e.world, kind, zoom);
+          if (!o) {
+            toast(projectOnWall(floor, e.world, 14 / zoom) ? "Hier past dat niet: de muur is te kort of er zit al iets." : `Klik op een muur om een ${OPENING_LABEL[kind].toLowerCase()} te plaatsen.`);
+            return true;
+          }
+          const id = globalThis.crypto.randomUUID();
+          const after = addOpening(floor, o, id);
+          if (after) {
+            const label = OPENING_LABEL[kind];
+            commit(after, `${label} geplaatst`, `${label} weer weggehaald`, `${label} terug geplaatst`);
+            setPreview(EMPTY);
+          }
+          return true;
+        }
+        if (e.phase === "cancel") {
+          setPreview(EMPTY);
+          return true;
+        }
+        return false;
+      }
 
       if (tool === "wall") {
         if (e.phase === "hover" || e.phase === "move" || e.phase === "down") {
@@ -409,7 +486,7 @@ export function usePlanTools({ store, doc, floor, view, selection, setSelection,
       }
       if (e.phase === "down") {
         const hit = hitTest(floor, e.world, zoom);
-        if (hit && (hit.kind === "node" || hit.kind === "wall")) {
+        if (hit && (hit.kind === "node" || hit.kind === "wall" || hit.kind === "opening")) {
           drag.current = { kind: hit.kind, id: hit.id, start: e.world, base: floor, moved: false };
           setSelection(hit);
           return true;
@@ -421,6 +498,24 @@ export function usePlanTools({ store, doc, floor, view, selection, setSelection,
       if (e.phase === "move") {
         if (!d.moved && distance(d.start, e.world) * zoom < 4) return true;
         d.moved = true;
+        if (d.kind === "opening") {
+          // langs de muur schuiven, of naar een andere muur
+          const cur = d.base.openings.find((x) => x.id === d.id);
+          if (!cur) return true;
+          const hit = projectOnWall(d.base, e.world, 30 / zoom);
+          const frame = hit?.frame ?? wallFrame(d.base, cur.wall);
+          if (!frame) return true;
+          const along = hit ? hit.along : dot({ x: e.world.x - frame.a.x, y: e.world.y - frame.a.y }, frame.d);
+          const wall = frame.wall.id;
+          const base = wall === cur.wall ? d.base : { ...d.base, openings: d.base.openings.filter((x) => x.id !== d.id) };
+          const offset = fitOffset(base, frame, cur.width, snapOffset(frame, cur.width, along, grid ?? 50), d.id);
+          if (offset === null) return true;
+          const swing = wall === cur.wall || !hit ? cur.swing : { side: hit.side, hinge: cur.swing?.hinge ?? "start" };
+          setDraft({ ...d.base, openings: d.base.openings.map((x) => (x.id === d.id ? { ...x, wall, offset, swing } : x)) });
+          const g = cornerGaps(frame, offset, cur.width);
+          setPreview({ snap: null, chain: null, rect: null, chip: { at: e.world, text: `${formatMeters(g.start)} · ${formatMeters(g.end)}` } });
+          return true;
+        }
         if (d.kind === "node") {
           const sr = snap(e.world, { ignore: new Set([d.id]) });
           setDraft(moveNodes(d.base, new Map([[d.id, sr.p]])));
@@ -452,6 +547,11 @@ export function usePlanTools({ store, doc, floor, view, selection, setSelection,
         setPreview(EMPTY);
         const cur = draftRef.current;
         setDraft(null);
+        if (cur && d.moved && e.phase === "up" && d.kind === "opening") {
+          const label = OPENING_LABEL[cur.openings.find((x) => x.id === d.id)?.kind ?? "door"];
+          commit(cur, `${label} verschoven`, `${label} teruggezet`, `${label} opnieuw verschoven`);
+          return true;
+        }
         if (cur && d.moved && e.phase === "up") {
           const node = d.kind === "node";
           commit(
@@ -465,7 +565,7 @@ export function usePlanTools({ store, doc, floor, view, selection, setSelection,
       }
       return false;
     },
-    [view, tool, template, floor, snap, grid, wallPreview, addSegment, innerChip, commitRoom, preview.rect, setSelection, commit, setDraft, s.wallDefaults.exterior],
+    [view, tool, template, floor, snap, grid, wallPreview, addSegment, innerChip, commitRoom, preview.rect, setSelection, commit, setDraft, s.wallDefaults.exterior, doorKind, openingAt, toast],
   );
 
   /* ---------------- toetsenbord ---------------- */
@@ -482,6 +582,10 @@ export function usePlanTools({ store, doc, floor, view, selection, setSelection,
         `${room?.name ?? "Ruimte"} teruggezet`,
         `${room?.name ?? "Ruimte"} weer verwijderd`,
       );
+    } else if (selection.kind === "opening") {
+      const o = floor.openings.find((x) => x.id === selection.id);
+      const label = OPENING_LABEL[o?.kind ?? "door"];
+      commit(removeOpening(floor, selection.id), `${label} verwijderd`, `${label} teruggezet`, `${label} weer verwijderd`);
     } else if (selection.kind === "node") {
       const ids = new Set(floor.walls.filter((w) => w.start === selection.id || w.end === selection.id).map((w) => w.id));
       commit(removeWalls(floor, ids), "Hoek en muren verwijderd", "Hoek teruggezet", "Hoek weer verwijderd");
@@ -492,6 +596,17 @@ export function usePlanTools({ store, doc, floor, view, selection, setSelection,
   const nudge = useCallback(
     (dx: number, dy: number) => {
       if (!selection || selection.kind === "room") return;
+      if (selection.kind === "opening") {
+        const o = floor.openings.find((x) => x.id === selection.id);
+        const f = o && wallFrame(floor, o.wall);
+        if (!o || !f) return;
+        const along = dx * f.d.x + dy * f.d.y;
+        if (Math.abs(along) < 1e-6) return;
+        const step = Math.sign(along) * Math.max(Math.abs(dx), Math.abs(dy));
+        const after = updateOpening(floor, o.id, { offset: o.offset + step });
+        if (after) commit(after, "Verschoven", "Terug op de vorige plaats", "Opnieuw verschoven");
+        return;
+      }
       const ids =
         selection.kind === "node"
           ? [selection.id]
@@ -513,7 +628,7 @@ export function usePlanTools({ store, doc, floor, view, selection, setSelection,
   const onKey = useCallback(
     (e: KeyboardEvent): boolean => {
       const k = e.key;
-      if (tool !== "select" && /^[0-9.,xX×*]$/.test(k)) {
+      if ((tool === "wall" || tool === "room") && /^[0-9.,xX×*]$/.test(k)) {
         setBuffer((b) => (b + k).slice(0, 20));
         return true;
       }
@@ -554,6 +669,8 @@ export function usePlanTools({ store, doc, floor, view, selection, setSelection,
       if (key === "v") return setTool("select"), true;
       if (key === "m") return setTool("wall"), true;
       if (key === "k") return setTool("room"), true;
+      if (key === "d") return setTool("door"), true;
+      if (key === "r") return setTool("window"), true;
       if ((k === "Delete" || k === "Backspace") && selection) {
         deleteSelection();
         return true;
@@ -588,6 +705,10 @@ export function usePlanTools({ store, doc, floor, view, selection, setSelection,
     setTemplate,
     justDrawn,
     setJustDrawn,
+    doorKind,
+    setDoorKind,
+    openingWidth,
+    setOpeningWidth,
   };
 }
 
