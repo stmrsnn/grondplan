@@ -416,7 +416,7 @@ export function Editor({ initialDoc, backend, email }: EditorProps) {
                   ],
                   doc.settings.wallDefaults.exterior,
                 ).map((poly, i) => (
-                  <path key={i} d={`M${poly.map((p) => `${p.x} ${p.y}`).join("L")}Z`} fill="var(--accent)" />
+                  <path key={i} d={`M${poly.map((p) => `${p.x} ${p.y}`).join("L")}Z`} fill={tools.preview.rect?.bad ? "var(--danger)" : "var(--accent)"} />
                 ))}
               </g>
             )}

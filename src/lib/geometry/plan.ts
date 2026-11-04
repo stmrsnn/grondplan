@@ -11,7 +11,7 @@
  *  - rebuildFloor: alles samen na elke wijziging, ruimtes behouden hun naam.
  */
 import type { Floor, Id, Node, Room, Wall } from "../model/types";
-import { signedArea } from "./polygon";
+import { clipToRect, signedArea } from "./polygon";
 import { add, cross, dot, length, scale, sub, type Vec } from "./vec";
 
 /** Tolerantie in mm: alles wat dichter ligt, valt samen. */
@@ -916,6 +916,30 @@ export function snapRoomRect(
     }
   }
   return { a: { x: x0, y: y0 }, b: { x: x1, y: y1 } };
+}
+
+/**
+ * Mag hier een nieuwe kamer komen? Ze mag tegen andere kamers liggen, of
+ * volledig binnen één kamer (om die op te delen), maar niet half over andere
+ * kamers heen: dan zou elke kruising van muren een nieuw kamertje worden.
+ * `a` en `b` zijn hartlijnhoeken, `t` de muurdikte.
+ */
+export function roomFits(floor: Floor, a: Vec, b: Vec, t: number): boolean {
+  const m = t / 2 + 20;
+  const x0 = Math.min(a.x, b.x) + m;
+  const x1 = Math.max(a.x, b.x) - m;
+  const y0 = Math.min(a.y, b.y) + m;
+  const y1 = Math.max(a.y, b.y) - m;
+  if (x1 <= x0 || y1 <= y0) return true;
+  const rectArea = (x1 - x0) * (y1 - y0);
+  const hits: number[] = [];
+  for (const r of analyzeFloor(floor).rooms) {
+    const part = clipToRect(r.inner, x0, y0, x1, y1);
+    const ov = part.length >= 3 ? Math.abs(signedArea(part)) : 0;
+    if (ov > 50_000) hits.push(ov); // meer dan 0,05 m² overlap telt
+  }
+  if (hits.length === 0) return true;
+  return hits.length === 1 && hits[0] >= rectArea * 0.99;
 }
 
 /**

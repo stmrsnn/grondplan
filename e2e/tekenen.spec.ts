@@ -212,3 +212,25 @@ test("deur en raam plaatsen, aanpassen, verwijderen en terugzetten", async ({ pa
   // de kamer blijft even groot: openingen veranderen de oppervlakte niet
   expect(await overview(page)).toEqual(["Ruimte 1 20,0 m²", "Gelijkvloers 20,0 m²"]);
 });
+
+test("een kamer half over een andere kamer wordt geweigerd", async ({ page }) => {
+  const box = await canvas(page);
+  await page.keyboard.press("k");
+  await page.mouse.click(box.x + 600, box.y + 200);
+  await page.mouse.move(box.x + 800, box.y + 400);
+  await page.keyboard.type("5x4");
+  await page.keyboard.press("Enter");
+  await page.keyboard.press("Escape");
+  const o = await page.evaluate(() => {
+    const p = [...document.querySelectorAll('svg[role=application] g[transform^="translate"] path')].find((x) => x.getAttribute("fill") === "var(--wall-fill)")!;
+    const r = p.getBoundingClientRect();
+    return { x1: r.x + r.width, y0: r.y, k: r.width / 5700 };
+  });
+  // slaapkamer stempelen: hoek 1,5 m binnen de rechtermuur, ver genoeg van elke lijn voor de magneet
+  await page.getByRole("button", { name: /Slaapkamer 3,5×3/ }).click();
+  const at = { x: o.x1 - (175 + 1500) * o.k, y: o.y0 + (175 + 2000) * o.k };
+  await page.mouse.move(at.x, at.y);
+  await page.mouse.click(at.x, at.y);
+  await expect(page.getByText(/valt half over een andere kamer/)).toBeVisible();
+  expect(await overview(page)).toEqual(["Ruimte 1 20,0 m²", "Gelijkvloers 20,0 m²"]);
+});

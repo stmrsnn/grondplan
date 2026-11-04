@@ -59,3 +59,28 @@ export function bounds(points: readonly Vec[]): Bounds | null {
   }
   return { minX, minY, maxX, maxY };
 }
+
+/** Stuk van een veelhoek binnen een asrechte rechthoek (Sutherland–Hodgman). */
+export function clipToRect(poly: readonly Vec[], x0: number, y0: number, x1: number, y1: number): Vec[] {
+  const edges: [(p: Vec) => boolean, (a: Vec, b: Vec) => Vec][] = [
+    [(p) => p.x >= x0, (a, b) => ({ x: x0, y: a.y + ((b.y - a.y) * (x0 - a.x)) / (b.x - a.x) })],
+    [(p) => p.x <= x1, (a, b) => ({ x: x1, y: a.y + ((b.y - a.y) * (x1 - a.x)) / (b.x - a.x) })],
+    [(p) => p.y >= y0, (a, b) => ({ x: a.x + ((b.x - a.x) * (y0 - a.y)) / (b.y - a.y), y: y0 })],
+    [(p) => p.y <= y1, (a, b) => ({ x: a.x + ((b.x - a.x) * (y1 - a.y)) / (b.y - a.y), y: y1 })],
+  ];
+  let out: Vec[] = [...poly];
+  for (const [inside, cut] of edges) {
+    const input = out;
+    out = [];
+    for (let i = 0; i < input.length; i++) {
+      const cur = input[i];
+      const prev = input[(i - 1 + input.length) % input.length];
+      if (inside(cur)) {
+        if (!inside(prev)) out.push(cut(prev, cur));
+        out.push(cur);
+      } else if (inside(prev)) out.push(cut(prev, cur));
+    }
+    if (out.length === 0) break;
+  }
+  return out;
+}

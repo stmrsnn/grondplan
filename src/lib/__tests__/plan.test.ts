@@ -212,7 +212,7 @@ describe("snelheid", () => {
   });
 });
 
-import { floorAreas, placeRoom, snapRoomRect, rebuildFloor, setWallThickness, sharedWalls, wallPolygons as polys2 } from "../geometry/plan";
+import { floorAreas, placeRoom, roomFits, snapRoomRect, rebuildFloor, setWallThickness, sharedWalls, wallPolygons as polys2 } from "../geometry/plan";
 import { History } from "../history/history";
 import { updateFloor } from "../model/commands";
 import { createDoc } from "../model/doc";
@@ -318,6 +318,16 @@ describe("gedeelde muur", () => {
     const k = placeRoom(liv.floor, r.a, r.b, P, 100, ids);
     expect(k.floor.rooms).toHaveLength(2);
     expect(dimsOf(k.floor, k.roomId!)).toEqual([3500, 3000]);
+  });
+
+  it("een kamer mag tegen of in een andere kamer, maar niet half erover", () => {
+    const liv = placeRoom(empty(), { x: -175, y: -175 }, { x: 6175, y: 4675 }, P, 100, ids).floor;
+    // ernaast
+    expect(roomFits(liv, { x: 6175, y: -175 }, { x: 9875, y: 3175 }, T)).toBe(true);
+    // volledig erin (opdelen)
+    expect(roomFits(liv, { x: 1000, y: 1000 }, { x: 3000, y: 3000 }, T)).toBe(true);
+    // half erover
+    expect(roomFits(liv, { x: 4000, y: 1000 }, { x: 8000, y: 3000 }, T)).toBe(false);
   });
 
   it("muurdikte aanpassen houdt de gekozen kamer even groot", () => {

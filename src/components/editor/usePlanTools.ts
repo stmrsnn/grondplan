@@ -13,6 +13,7 @@ import {
   pointInPolygon,
   rebuildFloor,
   placeRoom,
+  roomFits,
   snapRoomRect,
   wallBodyLine,
   removeWalls,
@@ -63,8 +64,8 @@ export interface ToolPreview {
   snap: SnapResult | null;
   /** Muur in aanbouw: punten van de ketting + het zwevende punt. */
   chain: Vec[] | null;
-  /** Kamer in aanbouw: twee hoeken (hartlijnen). */
-  rect: { a: Vec; b: Vec } | null;
+  /** Kamer in aanbouw: twee hoeken (hartlijnen); `bad` = past hier niet. */
+  rect: { a: Vec; b: Vec; bad?: boolean } | null;
   /** Tekst bij de cursor, bv. "3,25 m" of "4,00 × 3,00 m". */
   chip: { at: Vec; text: string } | null;
   /** Deur of raam dat geplaatst zou worden. */
@@ -260,6 +261,10 @@ export function usePlanTools({ store, doc, floor, view, selection, setSelection,
     (a0: Vec, b0: Vec, preset?: RoomTemplate, mode: "move" | "resize" = "move") => {
       // net naast een bestaande muur? dan er exact tegenaan
       const { a, b } = snapRoomRect(floor, a0, b0, mode, s.wallDefaults.exterior + 300);
+      if (!roomFits(floor, a, b, s.wallDefaults.exterior)) {
+        toast("Die kamer valt half over een andere kamer. Zet ze ernaast, of helemaal binnen een kamer om die op te delen.");
+        return;
+      }
       if (Math.abs(b.x - a.x) < 500 || Math.abs(b.y - a.y) < 500) {
         toast("Die kamer is te klein. Sleep een grotere rechthoek of typ de maten, bv. 4x3.");
         return;
@@ -420,8 +425,9 @@ export function usePlanTools({ store, doc, floor, view, selection, setSelection,
         const a = snap(e.world).p;
         const b = { x: a.x + template.w + t, y: a.y + template.d + t };
         if (e.phase === "hover" || e.phase === "move" || e.phase === "down") {
-          const r = snapRoomRect(floor, a, b, "move", t + 300);
-          setPreview({ snap: snap(e.world), chain: null, rect: r, chip: { at: r.b, text: `${template.label} · ${formatMeters(template.w)} × ${formatMeters(template.d)}` } });
+          const r0 = snapRoomRect(floor, a, b, "move", t + 300);
+          const r = { ...r0, bad: !roomFits(floor, r0.a, r0.b, t) };
+          setPreview({ snap: snap(e.world), chain: null, rect: r, chip: { at: r.b, text: r.bad ? "Valt over een kamer" : `${template.label} · ${formatMeters(template.w)} × ${formatMeters(template.d)}` } });
           return true;
         }
         if (e.phase === "up") {
@@ -450,7 +456,12 @@ export function usePlanTools({ store, doc, floor, view, selection, setSelection,
           setPreview({
             snap: sr,
             chain: null,
-            rect: a ? snapRoomRect(floor, a, sr.p, "resize", s.wallDefaults.exterior + 300) : null,
+            rect: a
+              ? (() => {
+                  const r0 = snapRoomRect(floor, a, sr.p, "resize", s.wallDefaults.exterior + 300);
+                  return { ...r0, bad: !roomFits(floor, r0.a, r0.b, s.wallDefaults.exterior) };
+                })()
+              : null,
             chip: a ? { at: sr.p, text: innerChip(a, sr.p) } : null,
           });
           return true;
