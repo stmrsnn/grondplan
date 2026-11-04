@@ -106,11 +106,14 @@ export const OpeningsLayer = memo(function OpeningsLayer({
   selection,
   hover,
   ghost,
+  conflicts,
 }: {
   shapes: OpeningShape[];
   selection: Selection;
   hover: Selection;
   ghost: OpeningShape | null;
+  /** Deuren die tegen iets slaan: in rood. */
+  conflicts: Map<Id, unknown>;
 }) {
   return (
     <g pointerEvents="none">
@@ -118,6 +121,7 @@ export const OpeningsLayer = memo(function OpeningsLayer({
         <OpeningSymbol
           key={sh.opening.id}
           shape={sh}
+          warn={conflicts.has(sh.opening.id)}
           state={
             selection?.kind === "opening" && selection.id === sh.opening.id
               ? "selected"
@@ -127,16 +131,24 @@ export const OpeningsLayer = memo(function OpeningsLayer({
           }
         />
       ))}
-      {ghost && <OpeningSymbol shape={ghost} state="ghost" />}
+      {ghost && <OpeningSymbol shape={ghost} state="ghost" warn={false} />}
     </g>
   );
 });
 
 const line = (a: Vec, b: Vec) => `M${a.x} ${a.y}L${b.x} ${b.y}`;
 
-function OpeningSymbol({ shape, state }: { shape: OpeningShape; state: "normal" | "hover" | "selected" | "ghost" }) {
-  const ink = state === "normal" || state === "hover" ? "var(--wall-line)" : "var(--accent)";
-  const leaf = shape.leaf;
+function OpeningSymbol({
+  shape,
+  state,
+  warn,
+}: {
+  shape: OpeningShape;
+  state: "normal" | "hover" | "selected" | "ghost";
+  warn: boolean;
+}) {
+  const ink =
+    state === "selected" || state === "ghost" ? "var(--accent)" : warn ? "var(--danger)" : "var(--wall-line)";
   return (
     <g opacity={state === "ghost" ? 0.9 : 1}>
       <path d={path(shape.cut)} fill="var(--canvas)" />
@@ -151,18 +163,74 @@ function OpeningSymbol({ shape, state }: { shape: OpeningShape; state: "normal" 
         strokeWidth={1}
         vectorEffect="non-scaling-stroke"
       />
-      {leaf && (
-        <>
-          <path d={line(leaf.hinge, leaf.tip)} stroke={ink} strokeWidth={1.75} vectorEffect="non-scaling-stroke" />
+      {shape.panels.length > 0 && (
+        <path d={shape.panels.map(([a, b]) => line(a, b)).join("")} stroke={ink} strokeWidth={2.5} vectorEffect="non-scaling-stroke" />
+      )}
+      {shape.dashed.length > 0 && (
+        <path
+          d={shape.dashed.map(([a, b]) => line(a, b)).join("")}
+          stroke={ink}
+          strokeWidth={1}
+          strokeDasharray="5 4"
+          vectorEffect="non-scaling-stroke"
+        />
+      )}
+      {shape.leaves.map((l, i) => (
+        <g key={i}>
+          {warn && state === "normal" && (
+            <path
+              d={`M${l.hinge.x} ${l.hinge.y}L${l.tip.x} ${l.tip.y}A${l.radius} ${l.radius} 0 0 ${l.sweep} ${l.to.x} ${l.to.y}Z`}
+              fill="var(--danger)"
+              opacity={0.12}
+            />
+          )}
+          <path d={line(l.hinge, l.tip)} stroke={ink} strokeWidth={1.75} vectorEffect="non-scaling-stroke" />
           <path
-            d={`M${leaf.tip.x} ${leaf.tip.y}A${leaf.radius} ${leaf.radius} 0 0 ${leaf.sweep} ${leaf.to.x} ${leaf.to.y}`}
+            d={`M${l.tip.x} ${l.tip.y}A${l.radius} ${l.radius} 0 0 ${l.sweep} ${l.to.x} ${l.to.y}`}
             fill="none"
             stroke={ink}
             strokeWidth={0.75}
             vectorEffect="non-scaling-stroke"
           />
-        </>
-      )}
+        </g>
+      ))}
+    </g>
+  );
+}
+
+/**
+ * Aanduiding bij ramen zoals op een bouwplan, buiten tegen de gevel:
+ * breedte/hoogte in cm en de borstwering ("120/135 · bw 90").
+ */
+export function OpeningLabels({ shapes, view }: { shapes: OpeningShape[]; view: Viewport }) {
+  const cm = (mm: number) => Math.round(mm / 10);
+  return (
+    <g pointerEvents="none">
+      {shapes.map((sh) => {
+        const o = sh.opening;
+        if (o.kind !== "window" || o.width * view.zoom < 34) return null;
+        const p = toScreen(view, sh.farFace);
+        const at = { x: p.x - sh.out.x * 11, y: p.y - sh.out.y * 11 };
+        let angle = (Math.atan2(sh.d.y, sh.d.x) * 180) / Math.PI;
+        if (angle > 90) angle -= 180;
+        if (angle <= -90) angle += 180;
+        const text = `${cm(o.width)}/${cm(o.height)}${o.sillHeight > 0 ? ` · bw ${cm(o.sillHeight)}` : ""}`;
+        return (
+          <text
+            key={o.id}
+            x={at.x}
+            y={at.y}
+            transform={`rotate(${angle} ${at.x} ${at.y})`}
+            textAnchor="middle"
+            dominantBaseline="middle"
+            fontSize={10.5}
+            className="tabular"
+            fill="var(--text-2)"
+          >
+            {text}
+          </text>
+        );
+      })}
     </g>
   );
 }
@@ -281,11 +349,14 @@ export function Annotations({
   view,
   onEditEdge,
   showDims,
+  notes,
 }: {
   analysis: FloorAnalysis;
   view: Viewport;
   onEditEdge: (room: RoomInfo, a: Vec, b: Vec, at: Vec) => void;
   showDims: boolean;
+  /** Korte waarschuwing onder de naam van een ruimte (bv. te weinig daglicht). */
+  notes?: Map<Id, string>;
 }) {
   const out: React.ReactNode[] = [];
   // zijden per ruimte maar één keer berekenen, niet bij elke beweging van het beeld
@@ -341,6 +412,11 @@ export function Annotations({
         <text textAnchor="middle" y={13} fontSize={12} fill="var(--text-2)" className="tabular">
           {formatArea(r.area)}
         </text>
+        {notes?.get(r.room.id) && (
+          <text textAnchor="middle" y={28} fontSize={11} fill="var(--warn-text)">
+            {notes.get(r.room.id)}
+          </text>
+        )}
       </g>,
     );
   }

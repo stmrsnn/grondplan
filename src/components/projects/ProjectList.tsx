@@ -9,7 +9,7 @@ import { Dialog } from "@/components/ui/Dialog";
 import { Field } from "@/components/ui/Field";
 import { useToast } from "@/components/ui/Toast";
 import { formatWhen } from "@/lib/format";
-import { readPreview } from "@/lib/model/preview";
+import { previewPath, readPreview, ROOM_CATEGORIES } from "@/lib/model/preview";
 import {
   cleanName,
   deleteProject,
@@ -327,8 +327,15 @@ function CardPreview({ raw }: { raw: unknown }) {
     >
       {preview ? (
         <svg viewBox={`0 0 ${preview.w} ${preview.h}`} className="h-full w-full">
+          {preview.rooms.map(([cat, ...pts], i) => (
+            <path key={`r${i}`} d={previewPath(pts)} fill={`var(--room-${ROOM_CATEGORIES[cat]})`} stroke="var(--wall-line)" strokeWidth={0.6} />
+          ))}
+          {preview.walls.length > 0 && <path d={preview.walls.map(previewPath).join("")} fill="var(--wall-fill)" />}
+          {preview.cuts.map((c, i) => (
+            <path key={`c${i}`} d={previewPath(c)} fill="var(--canvas)" />
+          ))}
           {preview.lines.map(([x1, y1, x2, y2, t], i) => (
-            <line key={i} x1={x1} y1={y1} x2={x2} y2={y2} stroke="var(--wall)" strokeWidth={t} strokeLinecap="square" />
+            <line key={i} x1={x1} y1={y1} x2={x2} y2={y2} stroke="var(--wall-fill)" strokeWidth={t} strokeLinecap="square" />
           ))}
         </svg>
       ) : (

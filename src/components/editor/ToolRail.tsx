@@ -2,8 +2,7 @@
 
 import { DoorOpen, Grid2x2, MousePointer2, PenLine, Square } from "lucide-react";
 import { formatMeters } from "@/lib/format";
-import { widthsFor } from "@/lib/geometry/openings";
-import type { OpeningKind } from "@/lib/model/types";
+import { CHOICES, DOOR_CHOICES, WINDOW_CHOICES, type OpeningChoice } from "@/lib/geometry/openings";
 import type { WallDefaults } from "@/lib/model/types";
 import { ROOM_TEMPLATES, type RoomTemplate, type Tool, type WallChoice } from "./usePlanTools";
 
@@ -11,7 +10,7 @@ const TOOLS: { id: Tool; label: string; key: string; icon: React.ReactNode; hint
   { id: "select", label: "Selecteren", key: "V", icon: <MousePointer2 size={18} />, hint: "Klik om te kiezen, sleep om te verschuiven" },
   { id: "room", label: "Kamer", key: "K", icon: <Square size={18} />, hint: "Sleep een rechthoek, of klik een hoek en typ 4x3" },
   { id: "wall", label: "Muur", key: "M", icon: <PenLine size={18} />, hint: "Klik punt na punt; typ een lengte en Enter" },
-  { id: "door", label: "Deur", key: "D", icon: <DoorOpen size={18} />, hint: "Klik op een muur. De deur draait open naar de kant van je cursor." },
+  { id: "door", label: "Deur", key: "D", icon: <DoorOpen size={18} />, hint: "Klik op een muur. Een binnendeur draait naar de kant van je cursor, een buitendeur naar binnen." },
   { id: "window", label: "Raam", key: "R", icon: <Grid2x2 size={18} />, hint: "Klik op een muur om een raam te plaatsen" },
 ];
 
@@ -30,8 +29,8 @@ export function ToolRail({
   defaults,
   template,
   setTemplate,
-  doorKind,
-  setDoorKind,
+  openingChoice,
+  setOpeningChoice,
   openingWidth,
   setOpeningWidth,
 }: {
@@ -43,12 +42,15 @@ export function ToolRail({
   defaults: WallDefaults;
   template: RoomTemplate | null;
   setTemplate: (t: RoomTemplate | null) => void;
-  doorKind: "door" | "passage";
-  setDoorKind: (k: "door" | "passage") => void;
-  openingWidth: Record<OpeningKind, number | null>;
-  setOpeningWidth: (w: Record<OpeningKind, number | null>) => void;
+  openingChoice: { door: OpeningChoice; window: OpeningChoice };
+  setOpeningChoice: (c: { door: OpeningChoice; window: OpeningChoice }) => void;
+  openingWidth: Partial<Record<OpeningChoice, number>>;
+  setOpeningWidth: (w: Partial<Record<OpeningChoice, number>>) => void;
 }) {
-  const openingKind: OpeningKind | null = tool === "window" ? "window" : tool === "door" ? doorKind : null;
+  const group = tool === "door" ? "door" : tool === "window" ? "window" : null;
+  const choice = group ? openingChoice[group] : null;
+  const chip = (on: boolean) =>
+    `rounded-full border px-2 py-0.5 text-[12px] ${on ? "border-accent bg-accent text-on-accent" : "border-line text-ink hover:border-accent hover:bg-accent-soft"}`;
   const active = TOOLS.find((t) => t.id === tool)!;
   return (
     <div className="pointer-events-none absolute left-3 top-16 flex items-start gap-2">
@@ -101,54 +103,48 @@ export function ToolRail({
               </div>
             </div>
           )}
-          {tool === "door" && (
-            <div className="flex rounded-[var(--radius-control)] bg-surface-2 p-0.5" role="radiogroup" aria-label="Soort opening">
-              {(["door", "passage"] as const).map((k) => (
-                <button
-                  key={k}
-                  type="button"
-                  role="radio"
-                  aria-checked={doorKind === k}
-                  onClick={() => setDoorKind(k)}
-                  className={`h-7 flex-1 rounded-[6px] px-2 ${
-                    doorKind === k ? "border border-line bg-bg font-medium text-ink" : "text-ink-3 hover:text-ink"
-                  }`}
-                >
-                  {k === "door" ? "Deur" : "Doorgang"}
-                </button>
-              ))}
-            </div>
-          )}
-          {openingKind && (
-            <div className="flex flex-col gap-1.5">
-              <span className="text-[11px] font-medium uppercase tracking-wide text-ink-3">Breedte in cm</span>
-              <div className="flex flex-wrap gap-1">
-                <button
-                  type="button"
-                  aria-pressed={openingWidth[openingKind] === null}
-                  onClick={() => setOpeningWidth({ ...openingWidth, [openingKind]: null })}
-                  title={openingKind === "door" ? "83 cm binnen, 100 cm in een buitenmuur" : "Standaardmaat"}
-                  className={`rounded-full border px-2 py-0.5 text-[12px] ${
-                    openingWidth[openingKind] === null ? "border-accent bg-accent text-on-accent" : "border-line text-ink hover:border-accent hover:bg-accent-soft"
-                  }`}
-                >
-                  Vanzelf
-                </button>
-                {widthsFor(openingKind).map((w) => (
+          {group && choice && (
+            <>
+              <div className="flex flex-wrap gap-1" role="radiogroup" aria-label="Soort">
+                {(group === "door" ? DOOR_CHOICES : WINDOW_CHOICES).map((c) => (
                   <button
-                    key={w}
+                    key={c}
                     type="button"
-                    aria-pressed={openingWidth[openingKind] === w}
-                    onClick={() => setOpeningWidth({ ...openingWidth, [openingKind]: w })}
-                    className={`tabular rounded-full border px-2 py-0.5 text-[12px] ${
-                      openingWidth[openingKind] === w ? "border-accent bg-accent text-on-accent" : "border-line text-ink hover:border-accent hover:bg-accent-soft"
-                    }`}
+                    role="radio"
+                    aria-checked={choice === c}
+                    onClick={() => setOpeningChoice({ ...openingChoice, [group]: c })}
+                    className={chip(choice === c)}
                   >
-                    {cm(w)}
+                    {CHOICES[c].label}
                   </button>
                 ))}
               </div>
-            </div>
+              <div className="flex flex-col gap-1.5">
+                <span className="text-[11px] font-medium uppercase tracking-wide text-ink-3">Breedte in cm</span>
+                <div className="flex flex-wrap gap-1">
+                  <button
+                    type="button"
+                    aria-pressed={openingWidth[choice] === undefined}
+                    onClick={() => setOpeningWidth({ ...openingWidth, [choice]: undefined })}
+                    title={choice === "single" ? "83 cm binnen, 100 cm in een buitenmuur" : "Standaardmaat"}
+                    className={chip(openingWidth[choice] === undefined)}
+                  >
+                    Vanzelf
+                  </button>
+                  {CHOICES[choice].widths.map((w) => (
+                    <button
+                      key={w}
+                      type="button"
+                      aria-pressed={openingWidth[choice] === w}
+                      onClick={() => setOpeningWidth({ ...openingWidth, [choice]: w })}
+                      className={`tabular ${chip(openingWidth[choice] === w)}`}
+                    >
+                      {cm(w)}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </>
           )}
           {tool === "wall" && (
             <div className="flex rounded-[var(--radius-control)] bg-surface-2 p-0.5" role="radiogroup" aria-label="Soort muur">
@@ -174,7 +170,7 @@ export function ToolRail({
               Enter om te tekenen
             </span>
           ) : (
-            <span className="text-ink-3">{openingKind ? "Esc stopt · daarna slepen om te verschuiven" : "Esc stopt · Shift = vrije hoek"}</span>
+            <span className="text-ink-3">{group ? "Esc stopt · daarna slepen om te verschuiven" : "Esc stopt · Shift = vrije hoek"}</span>
           )}
         </div>
       )}

@@ -26,8 +26,8 @@ import type { EditorBackend } from "./backend";
 import { Compass } from "./NorthArrow";
 import { PropertiesPanel } from "./Panels";
 import { PlanCanvas } from "./PlanCanvas";
-import { Annotations, Chip, FloorLayer, GhostFloor, Guides, OpeningsLayer, SnapMarker, type Selection } from "./PlanLayers";
-import { openingMarks, openingShape, type OpeningShape } from "@/lib/geometry/openings";
+import { Annotations, Chip, FloorLayer, GhostFloor, Guides, OpeningLabels, OpeningsLayer, SnapMarker, type Selection } from "./PlanLayers";
+import { doorConflicts, needsLintel, openingMarks, openingShape, roomDaylight, type OpeningShape } from "@/lib/geometry/openings";
 import { ToolRail } from "./ToolRail";
 import { chainPolygons, usePlanTools } from "./usePlanTools";
 import { SaveIndicator } from "./SaveIndicator";
@@ -152,6 +152,16 @@ export function Editor({ initialDoc, backend, email }: EditorProps) {
     [shownFloor],
   );
   const ghostOpening = tools.preview.opening ? openingShape(floor, tools.preview.opening) : null;
+  const conflicts = useMemo(() => doorConflicts(shownFloor, analysis), [shownFloor, analysis]);
+  // daglicht: pas melden zodra er ramen getekend worden, anders is elke nieuwe kamer "te donker"
+  const daylightNotes = useMemo(() => {
+    const notes = new Map<string, string>();
+    if (!shownFloor.openings.some((o) => o.kind === "window")) return notes;
+    for (const [id, d] of roomDaylight(shownFloor, analysis)) if (!d.ok) notes.set(id, "te weinig daglicht");
+    return notes;
+  }, [shownFloor, analysis]);
+  const ghostLintel =
+    tools.preview.opening && floor.walls.some((w) => w.id === tools.preview.opening!.wall && needsLintel(tools.preview.opening!, w));
   // maten bij de deur of het raam dat je plaatst, versleept of geselecteerd hebt
   const markedOpening =
     tools.preview.opening ??
@@ -316,8 +326,9 @@ export function Editor({ initialDoc, backend, email }: EditorProps) {
           <p>
             <strong className="text-ink">Deur (D) en raam (R):</strong> klik op een muur. Een deur
             draait open naar de kant van je cursor, met de scharnieren bij de dichtste hoek. Kies
-            vooraf een breedte, of later in het paneel rechts. Sleep een deur of raam om het te
-            verschuiven, ook naar een andere muur.
+            vooraf een soort en breedte, of later in het paneel rechts. Sleep een deur of raam om
+            het te verschuiven, ook naar een andere muur. Geselecteerde deur: F draait ze de andere
+            kant op, H wisselt de scharnieren.
           </p>
           <p>
             <strong className="text-ink">Maten aanpassen:</strong> klik op een maat in een kamer en
@@ -356,10 +367,18 @@ export function Editor({ initialDoc, backend, email }: EditorProps) {
                   analysis={analysis}
                   view={v}
                   showDims={!tools.draft && !moving && marks.length === 0}
+                  notes={daylightNotes}
                   onEditEdge={(room, a, b, at) =>
                     setDimEdit({ room, a, b, at, value: formatMeters(Math.hypot(b.x - a.x, b.y - a.y)).replace(" m", "") })
                   }
                 />
+                {!moving && <OpeningLabels shapes={openingShapes} view={v} />}
+                {ghostOpening && ghostLintel && (
+                  <Chip
+                    at={{ x: toScreen(v, ghostOpening.center).x, y: toScreen(v, ghostOpening.center).y - 34 }}
+                    text="Dragende muur: latei nodig"
+                  />
+                )}
                 {tools.preview.snap && <Guides guides={tools.preview.snap.guides} view={v} />}
                 {tools.preview.snap && tools.tool !== "select" && <SnapMarker snap={tools.preview.snap} view={v} />}
                 {selection?.kind === "node" && analysis.nodeById.get(selection.id) && (
@@ -396,7 +415,7 @@ export function Editor({ initialDoc, backend, email }: EditorProps) {
           >
             {below && <GhostFloor analysis={below} />}
             <FloorLayer analysis={analysis} selection={selection} hover={tools.hover} />
-            <OpeningsLayer shapes={openingShapes} selection={selection} hover={tools.hover} ghost={ghostOpening} />
+            <OpeningsLayer shapes={openingShapes} selection={selection} hover={tools.hover} ghost={ghostOpening} conflicts={conflicts} />
             {tools.preview.chain && (
               <g opacity={0.7}>
                 {chainPolygons(tools.preview.chain, tools.wallChoice === "exterior" ? doc.settings.wallDefaults.exterior : doc.settings.wallDefaults.interior).map((poly, i) => (
@@ -488,8 +507,8 @@ export function Editor({ initialDoc, backend, email }: EditorProps) {
             defaults={doc.settings.wallDefaults}
             template={tools.template}
             setTemplate={tools.setTemplate}
-            doorKind={tools.doorKind}
-            setDoorKind={tools.setDoorKind}
+            openingChoice={tools.openingChoice}
+            setOpeningChoice={tools.setOpeningChoice}
             openingWidth={tools.openingWidth}
             setOpeningWidth={tools.setOpeningWidth}
           />

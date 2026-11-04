@@ -796,6 +796,28 @@ export function stretch(floor: Floor, u: Vec, cut: number, delta: number): Floor
   };
 }
 
+/**
+ * Kruist een muur aan een van deze knooppunten nu een andere muur? Dat
+ * gebeurt bij het verslepen van een hoek of muur door een andere kamer, en
+ * zou van elke kruising een nieuw kamertje maken.
+ */
+export function createsCrossing(floor: Floor, moved: Set<Id>): boolean {
+  const byId = new Map(floor.nodes.map((n) => [n.id, n]));
+  const movedWalls = floor.walls.filter((w) => moved.has(w.start) || moved.has(w.end));
+  for (const w of movedWalls) {
+    const a = byId.get(w.start);
+    const b = byId.get(w.end);
+    if (!a || !b) continue;
+    for (const o of floor.walls) {
+      if (o.id === w.id || o.start === w.start || o.start === w.end || o.end === w.start || o.end === w.end) continue;
+      const c = byId.get(o.start);
+      const d = byId.get(o.end);
+      if (c && d && segmentIntersection(a, b, c, d)) return true;
+    }
+  }
+  return false;
+}
+
 /** Verwijdert muren; ruimtes die erdoor openvallen, verdwijnen vanzelf. */
 export function removeWalls(floor: Floor, ids: Set<Id>, newId: IdGen = defaultId): Floor {
   return rebuildFloor({ ...floor, walls: floor.walls.filter((w) => !ids.has(w.id)) }, newId, floor);

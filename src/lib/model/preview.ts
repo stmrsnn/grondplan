@@ -1,22 +1,33 @@
-import { wallBodyLine } from "../geometry/plan";
+import { openingShape } from "../geometry/openings";
+import { analyzeFloor, roomCategory, type RoomCategory } from "../geometry/plan";
+import type { Vec } from "../geometry/vec";
 import { bounds } from "../geometry/polygon";
 import type { ProjectDoc } from "./types";
 
 /**
- * Kleine samenvatting van het plan voor de projectkaart: enkel lijnstukken,
- * geschaald naar een vak van 240 × 144. Bewust geen SVG-tekst, zodat er nooit
- * opmaak uit de database rechtstreeks op de pagina belandt.
+ * Kleine samenvatting van het plan voor de projectkaart, in dezelfde stijl als
+ * het tekenvlak: ruimtes in hun kleur, grijze muren, deuren en ramen als
+ * uitsparing. Enkel getallen (geen SVG-tekst), zodat er nooit opmaak uit de
+ * database rechtstreeks op de pagina belandt.
  */
+export const ROOM_CATEGORIES: RoomCategory[] = ["leven", "slapen", "nat", "doorgang", "berging", "andere"];
+
 export interface PlanPreview {
   w: number;
   h: number;
-  /** [x1, y1, x2, y2, dikte] in previewcoördinaten (afgerond op 0,1). */
+  /** Per ruimte: [index in ROOM_CATEGORIES, x1, y1, x2, y2, …]. */
+  rooms: number[][];
+  /** Muren als veelhoek: [x1, y1, x2, y2, …]. */
+  walls: number[][];
+  /** Uitsparingen voor deuren en ramen. */
+  cuts: number[][];
+  /** Oude voorbeelden: [x1, y1, x2, y2, dikte]. */
   lines: [number, number, number, number, number][];
 }
 
 export const PREVIEW_W = 240;
 export const PREVIEW_H = 144;
-const MAX_LINES = 400;
+const MAX_SHAPES = 400;
 
 export function makePreview(doc: ProjectDoc): PlanPreview | null {
   // de verdieping met de meeste muren, bij gelijkheid het gelijkvloers
@@ -24,18 +35,9 @@ export function makePreview(doc: ProjectDoc): PlanPreview | null {
     (a, b) => b.walls.length - a.walls.length || Math.abs(a.elevation) - Math.abs(b.elevation),
   )[0];
   if (!floor || floor.walls.length === 0) return null;
-  const nodes = new Map(floor.nodes.map((n) => [n.id, n]));
-  const segs = floor.walls
-    .map((w) => {
-      const a = nodes.get(w.start);
-      const b = nodes.get(w.end);
-      if (!a || !b) return null;
-      const [p, q] = wallBodyLine(w, a, b);
-      return { a: p, b: q, t: w.thickness };
-    })
-    .filter((s): s is NonNullable<typeof s> => s !== null)
-    .slice(0, MAX_LINES);
-  const bb = bounds(segs.flatMap((s) => [s.a, s.b]));
+  const a = analyzeFloor(floor);
+  const wallPolys = [...a.wallPolys.values()].slice(0, MAX_SHAPES);
+  const bb = bounds(wallPolys.flat());
   if (!bb) return null;
   const pad = 12;
   const sw = Math.max(bb.maxX - bb.minX, 1);
@@ -44,26 +46,40 @@ export function makePreview(doc: ProjectDoc): PlanPreview | null {
   const ox = (PREVIEW_W - sw * k) / 2 - bb.minX * k;
   const oy = (PREVIEW_H - sh * k) / 2 - bb.minY * k;
   const r = (v: number) => Math.round(v * 10) / 10;
+  const flat = (poly: Vec[]) => poly.flatMap((p) => [r(p.x * k + ox), r(p.y * k + oy)]);
   return {
     w: PREVIEW_W,
     h: PREVIEW_H,
-    lines: segs.map((s) => [
-      r(s.a.x * k + ox),
-      r(s.a.y * k + oy),
-      r(s.b.x * k + ox),
-      r(s.b.y * k + oy),
-      r(Math.max(1, s.t * k)),
-    ]),
+    rooms: a.rooms.slice(0, MAX_SHAPES).map((ri) => [ROOM_CATEGORIES.indexOf(roomCategory(ri.room.function)), ...flat(ri.inner)]),
+    walls: wallPolys.map(flat),
+    cuts: floor.openings
+      .slice(0, MAX_SHAPES)
+      .map((o) => openingShape(floor, o))
+      .filter((x): x is NonNullable<typeof x> => x !== null)
+      .map((x) => flat(x.cut)),
+    lines: [],
   };
 }
+
+const nums = (v: unknown, min: number, max = 4000): v is number[] =>
+  Array.isArray(v) && v.length >= min && v.length <= max && v.every((x) => typeof x === "number" && Number.isFinite(x));
 
 /** Controleert een preview uit de database voor we ze tekenen. */
 export function readPreview(raw: unknown): PlanPreview | null {
   if (!raw || typeof raw !== "object") return null;
-  const p = raw as PlanPreview;
-  if (!Array.isArray(p.lines)) return null;
-  const lines = p.lines
-    .filter((l) => Array.isArray(l) && l.length === 5 && l.every((v) => typeof v === "number" && Number.isFinite(v)))
-    .slice(0, MAX_LINES);
-  return lines.length ? { w: PREVIEW_W, h: PREVIEW_H, lines } : null;
+  const p = raw as Partial<Record<keyof PlanPreview, unknown>>;
+  const list = (v: unknown, min: number) => (Array.isArray(v) ? v.filter((x) => nums(x, min)).slice(0, MAX_SHAPES) : []);
+  const rooms = list(p.rooms, 7).filter((x) => Number.isInteger(x[0]) && x[0] >= 0 && x[0] < ROOM_CATEGORIES.length && x.length % 2 === 1);
+  const walls = list(p.walls, 6).filter((x) => x.length % 2 === 0);
+  const cuts = list(p.cuts, 6).filter((x) => x.length % 2 === 0);
+  const lines = list(p.lines, 5).filter((x) => x.length === 5) as PlanPreview["lines"];
+  if (!walls.length && !lines.length) return null;
+  return { w: PREVIEW_W, h: PREVIEW_H, rooms, walls, cuts, lines };
+}
+
+/** Coördinaten → SVG-pad (enkel getallen, dus veilig). */
+export function previewPath(coords: number[]): string {
+  let d = "";
+  for (let i = 0; i + 1 < coords.length; i += 2) d += `${i === 0 ? "M" : "L"}${coords[i]} ${coords[i + 1]}`;
+  return d + "Z";
 }

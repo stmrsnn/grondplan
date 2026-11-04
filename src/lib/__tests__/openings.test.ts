@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
   addOpening,
+  choiceProps,
+  doorConflicts,
+  needsLintel,
+  roomDaylight,
+  roomSide,
   cornerGaps,
   fitOffset,
   hitOpening,
@@ -10,7 +15,7 @@ import {
   updateOpening,
   wallFrame,
 } from "../geometry/openings";
-import { addPolyline, placeRoom, rebuildFloor } from "../geometry/plan";
+import { addPolyline, createsCrossing, moveNodes, placeRoom, rebuildFloor } from "../geometry/plan";
 import type { Floor } from "../model/types";
 
 let n = 0;
@@ -72,7 +77,7 @@ describe("deuren en ramen", () => {
       "d1",
     )!;
     const sh = openingShape(g, g.openings[0])!;
-    const leaf = sh.leaf!;
+    const leaf = sh.leaves[0];
     expect(Math.round(Math.hypot(leaf.tip.x - leaf.hinge.x, leaf.tip.y - leaf.hinge.y))).toBe(830);
     expect(Math.round(Math.hypot(leaf.to.x - leaf.hinge.x, leaf.to.y - leaf.hinge.y))).toBe(830);
     // de uitsparing is precies zo breed als de deur en zo dik als de muur
@@ -114,8 +119,100 @@ describe("deuren en ramen", () => {
     expect(g.openings).toHaveLength(1);
     const after = openingShape(g, g.openings[0])!;
     for (const k of ["hinge", "tip", "to"] as const) {
-      expect(Math.round(after.leaf![k].x)).toBe(Math.round(before.leaf![k].x));
-      expect(Math.round(after.leaf![k].y)).toBe(Math.round(before.leaf![k].y));
+      expect(Math.round(after.leaves[0][k].x)).toBe(Math.round(before.leaves[0][k].x));
+      expect(Math.round(after.leaves[0][k].y)).toBe(Math.round(before.leaves[0][k].y));
     }
+  });
+});
+
+describe("soorten, botsingen en daglicht", () => {
+  const door = (wall: string, offset: number, extra: Partial<Parameters<typeof addOpening>[1]> = {}) => ({
+    wall,
+    kind: "door" as const,
+    offset,
+    width: 830,
+    height: 2100,
+    sillHeight: 0,
+    swing: { side: "left" as const, hinge: "start" as const },
+    ...extra,
+  });
+
+  it("een gevel weet waar binnen is", () => {
+    const { f, bottom } = living();
+    const fr = wallFrame(f, bottom.id)!;
+    const side = roomSide(f, fr)!;
+    // binnen = richting het midden van de kamer (boven de onderste gevel)
+    const n = side === "left" ? fr.n : { x: -fr.n.x, y: -fr.n.y };
+    expect(n.y).toBeLessThan(0);
+  });
+
+  it("dubbele deur heeft twee bladen, schuifdeur en poort geen draaicirkel", () => {
+    const { f, bottom } = living();
+    const dbl = addOpening(f, door(bottom.id, 3000, { ...choiceProps("double", "exterior"), variant: "double" }), "d")!;
+    expect(openingShape(dbl, dbl.openings[0])!.leaves).toHaveLength(2);
+    const sl = addOpening(f, door(bottom.id, 3000, { ...choiceProps("sliding", "exterior"), variant: "sliding" }), "d")!;
+    const s1 = openingShape(sl, sl.openings[0])!;
+    expect(s1.leaves).toHaveLength(0);
+    expect(s1.panels).toHaveLength(1);
+    expect(s1.dashed).toHaveLength(1);
+    const sw = addOpening(f, { ...door(bottom.id, 3000), ...choiceProps("slidingWindow", "exterior") }, "r")!;
+    // schuifraam: twee vlakken + twee vleugels
+    expect(openingShape(sw, sw.openings[0])!.lines).toHaveLength(4);
+  });
+
+  it("latei nodig bij een brede opening in een dragende muur", () => {
+    const { f, bottom } = living();
+    const g = addOpening(f, door(bottom.id, 3000, { width: 2400 }), "d")!;
+    expect(needsLintel(g.openings[0], bottom)).toBe(true);
+    expect(needsLintel({ ...g.openings[0], width: 900 }, bottom)).toBe(false);
+  });
+
+  it("een deur die tegen een muur of andere deur slaat, wordt gemeld", () => {
+    /** Gang van `w` breed en 4 m lang, met de linker- en rechtermuur. */
+    const hall = (w: number) => {
+      const f = placeRoom(empty(), { x: -175, y: -175 }, { x: w + 175, y: 4175 }, P, 100, ids).floor;
+      const side = (x: number) =>
+        f.walls.find((wl) => {
+          const a = f.nodes.find((n) => n.id === wl.start)!;
+          const b = f.nodes.find((n) => n.id === wl.end)!;
+          return a.x === x && b.x === x;
+        })!;
+      return { f, left: side(-175), right: side(w + 175) };
+    };
+    const inward = (f: Floor, wallId: string) => roomSide(f, wallFrame(f, wallId)!)!;
+    // twee deuren tegenover elkaar in een gang van 1,2 m: ze slaan tegen elkaar
+    const h1 = hall(1200);
+    let g = addOpening(h1.f, door(h1.left.id, 2000, { swing: { side: inward(h1.f, h1.left.id), hinge: "start" } }), "a")!;
+    g = addOpening(g, door(h1.right.id, 2000, { swing: { side: inward(g, h1.right.id), hinge: "end" } }), "b")!;
+    expect(doorConflicts(g).get("a")).toBe("deur");
+    // één deur in een gang van 70 cm: slaat tegen de muur aan de overkant
+    const h2 = hall(700);
+    const k = addOpening(h2.f, door(h2.left.id, 2000, { swing: { side: inward(h2.f, h2.left.id), hinge: "start" } }), "k")!;
+    expect(doorConflicts(k).get("k")).toBe("muur");
+    // dezelfde deur naar buiten draaiend: geen botsing
+    const out = inward(h2.f, h2.left.id) === "left" ? "right" : "left";
+    const o = addOpening(h2.f, door(h2.left.id, 2000, { swing: { side: out, hinge: "start" } }), "o")!;
+    expect(doorConflicts(o).size).toBe(0);
+  });
+
+  it("daglicht: een living van 27 m² heeft minstens 2,25 m² glas nodig", () => {
+    const { f, bottom } = living();
+    const liv = { ...f, rooms: f.rooms.map((r) => ({ ...r, function: "living" })) };
+    expect(roomDaylight(liv).get(liv.rooms[0].id)!.ok).toBe(false);
+    const g = addOpening(liv, { ...door(bottom.id, 3000), ...choiceProps("patio", "exterior") }, "t")!;
+    const d = roomDaylight(g).get(g.rooms[0].id)!;
+    expect(Math.round(d.needed / 1e4)).toBe(225);
+    expect(d.ok).toBe(true);
+  });
+
+  it("een muur door een andere muur slepen wordt herkend", () => {
+    let f = placeRoom(empty(), { x: -175, y: -175 }, { x: 4175, y: 3175 }, P, 100, ids).floor;
+    f = addPolyline(f, [{ x: 6000, y: 0 }, { x: 6000, y: 3000 }], { ...P, thickness: 100, kind: "interior" }, ids);
+    const free = f.nodes.find((n) => n.x === 6000 && n.y === 0)!;
+    // het losse muurtje naar binnen in de kamer slepen: kruist de gevel
+    const moved = moveNodes(f, new Map([[free.id, { x: 2000, y: 1500 }]]));
+    expect(createsCrossing(moved, new Set([free.id]))).toBe(true);
+    const ok = moveNodes(f, new Map([[free.id, { x: 6000, y: -500 }]]));
+    expect(createsCrossing(ok, new Set([free.id]))).toBe(false);
   });
 });

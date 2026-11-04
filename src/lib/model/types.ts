@@ -98,6 +98,12 @@ export interface Wall {
 
 export type OpeningKind = "door" | "window" | "passage";
 
+/**
+ * Uitvoering: deuren "single" (draaideur), "double", "sliding", "garage";
+ * ramen "window" (draairaam), "slidingWindow", "patio" (schuifraam tot op de vloer).
+ */
+export type OpeningVariant = "single" | "double" | "sliding" | "garage" | "window" | "slidingWindow" | "patio";
+
 export interface Opening {
   id: Id;
   wall: Id;
@@ -108,6 +114,8 @@ export interface Opening {
   height: number;
   /** Borstwering (hoogte onderkant raam boven de vloer), in mm. */
   sillHeight: number;
+  /** Uitvoering; afwezig = gewone draaideur of gewoon raam. */
+  variant?: OpeningVariant;
   /** Deuren: aan welke kant van de muur draait het blad, en waar zitten de scharnieren. */
   swing?: { side: "left" | "right"; hinge: "start" | "end" };
 }

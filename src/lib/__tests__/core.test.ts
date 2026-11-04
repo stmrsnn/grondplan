@@ -233,18 +233,19 @@ describe("miniatuur", () => {
       { id: "w2", start: "b", end: "c", thickness: 350, height: 2600, kind: "exterior", loadBearing: true },
     ];
     const p = makePreview(d)!;
-    expect(p.lines).toHaveLength(2);
-    for (const [x1, y1, x2, y2] of p.lines) {
-      for (const x of [x1, x2]) {
-        expect(x).toBeGreaterThanOrEqual(0);
-        expect(x).toBeLessThanOrEqual(240);
-      }
-      for (const y of [y1, y2]) {
-        expect(y).toBeGreaterThanOrEqual(0);
-        expect(y).toBeLessThanOrEqual(144);
+    expect(p.walls).toHaveLength(2);
+    for (const poly of p.walls) {
+      for (let i = 0; i < poly.length; i += 2) {
+        expect(poly[i]).toBeGreaterThanOrEqual(0);
+        expect(poly[i]).toBeLessThanOrEqual(240);
+        expect(poly[i + 1]).toBeGreaterThanOrEqual(0);
+        expect(poly[i + 1]).toBeLessThanOrEqual(144);
       }
     }
-    expect(readPreview(JSON.parse(JSON.stringify(p)))?.lines).toHaveLength(2);
+    expect(readPreview(JSON.parse(JSON.stringify(p)))?.walls).toHaveLength(2);
+    // oude voorbeelden blijven leesbaar
+    expect(readPreview({ lines: [[1, 2, 3, 4, 5]] })?.lines).toHaveLength(1);
+    expect(readPreview({ walls: [["<script>", 1, 2, 3, 4, 5]] })).toBeNull();
     expect(readPreview({ lines: [["<script>", 1, 2, 3, 4]] })).toBeNull();
   });
 });

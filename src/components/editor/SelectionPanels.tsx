@@ -21,14 +21,22 @@ import type { Floor, ProjectDoc } from "@/lib/model/types";
 import { W } from "@/lib/words";
 import { LengthField } from "./LengthField";
 import {
+  CHOICES,
+  choiceOf,
+  choiceProps,
   cornerGaps,
-  OPENING_LABEL,
-  openingDefaults,
+  DOOR_CHOICES,
+  doorConflicts,
+  GLASS_FACTOR,
+  LINTEL_LIMIT,
+  needsLintel,
+  openingName,
+  roomDaylight,
   updateOpening,
   wallFrame,
-  widthsFor,
+  WINDOW_CHOICES,
+  type OpeningChoice,
 } from "@/lib/geometry/openings";
-import type { OpeningKind } from "@/lib/model/types";
 import type { Selection } from "./PlanLayers";
 
 const selectCls =
@@ -104,6 +112,7 @@ export function SelectionPanel({
             <Stat label="Omtrek (bv. voor plinten)" value={formatMeters(perimeter(info))} />
           </div>
         </div>
+        <DaylightInfo floor={floor} analysis={analysis} roomId={room.id} />
         <label className="flex flex-col gap-1.5">
           <span className="text-[13px] font-medium text-ink-2">Wat voor ruimte?</span>
           <select
@@ -161,7 +170,7 @@ export function SelectionPanel({
   }
 
   if (selection.kind === "opening") {
-    return <OpeningPanel store={store} floor={floor} openingId={selection.id} onDelete={onDelete} />;
+    return <OpeningPanel store={store} floor={floor} analysis={analysis} openingId={selection.id} onDelete={onDelete} />;
   }
 
   if (selection.kind === "wall") {
@@ -410,21 +419,30 @@ function WallPanel({
   );
 }
 
+function Warning({ children }: { children: React.ReactNode }) {
+  return (
+    <p className="rounded-[var(--radius-control)] bg-warn-bg px-3 py-2 text-[12.5px] leading-relaxed text-warn-ink">{children}</p>
+  );
+}
+
 function OpeningPanel({
   store,
   floor,
+  analysis,
   openingId,
   onDelete,
 }: {
   store: EditorStore;
   floor: Floor;
+  analysis: FloorAnalysis;
   openingId: string;
   onDelete: () => void;
 }) {
   const o = floor.openings.find((x) => x.id === openingId);
   const frame = o ? wallFrame(floor, o.wall) : null;
   if (!o || !frame) return <p className="text-sm text-ink-3">Deze opening bestaat niet meer.</p>;
-  const label = OPENING_LABEL[o.kind];
+  const label = openingName(o);
+  const choice = choiceOf(o);
   const apply = (patch: Partial<typeof o>, what: string): string | void => {
     const after = updateOpening(floor, o.id, patch);
     if (!after) return "Past niet in deze muur";
@@ -438,11 +456,22 @@ function OpeningPanel({
     ? frame.d.x > 0 ? ["links", "rechts"] : ["rechts", "links"]
     : frame.d.y > 0 ? ["boven", "onder"] : ["onder", "boven"];
   const swing = o.swing ?? { side: "left" as const, hinge: "start" as const };
-  const setKind = (kind: OpeningKind) => {
-    if (kind === o.kind) return;
-    const def = openingDefaults(kind, frame.wall.kind);
-    apply({ kind, height: def.height, sillHeight: def.sillHeight, width: kind === "window" || o.kind === "window" ? def.width : o.width }, "soort");
+  const setChoice = (c: OpeningChoice) => {
+    if (c === choice) return;
+    const props = choiceProps(c, frame.wall.kind);
+    apply({ ...props, variant: props.variant }, "soort");
   };
+  const conflict = o.kind === "door" ? doorConflicts(floor, analysis).get(o.id) : undefined;
+  const turns = o.kind === "door" && (choice === "single" || choice === "double");
+  const chip = (on: boolean) =>
+    `rounded-full border px-2.5 py-1 text-[12.5px] ${on ? "border-accent bg-accent text-on-accent" : "border-line text-ink hover:border-accent hover:bg-accent-soft"}`;
+
+  const startField = (
+    <LengthField key="s" label={`Tot de hoek ${startWord}`} value={gaps.start} min={0} max={frame.len} onCommit={(mm) => apply({ offset: o.offset + (mm - gaps.start) }, "plaats")} />
+  );
+  const endField = (
+    <LengthField key="e" label={`Tot de hoek ${endWord}`} value={gaps.end} min={0} max={frame.len} onCommit={(mm) => apply({ offset: o.offset - (mm - gaps.end) }, "plaats")} />
+  );
 
   return (
     <section className="flex flex-col gap-4">
@@ -452,28 +481,32 @@ function OpeningPanel({
           In een {frame.wall.kind === "exterior" ? "buitenmuur" : "binnenmuur"}
         </span>
       </div>
-      <div className="flex rounded-[var(--radius-control)] bg-surface-2 p-0.5 text-[13px]" role="radiogroup" aria-label="Soort opening">
-        {(["door", "window", "passage"] as const).map((k) => (
-          <button
-            key={k}
-            type="button"
-            role="radio"
-            aria-checked={o.kind === k}
-            onClick={() => setKind(k)}
-            className={`h-8 flex-1 rounded-[6px] px-2 ${o.kind === k ? "border border-line bg-bg font-medium text-ink" : "text-ink-3 hover:text-ink"}`}
-          >
-            {OPENING_LABEL[k]}
-          </button>
+      <div className="flex flex-col gap-2" role="radiogroup" aria-label="Soort">
+        {[DOOR_CHOICES, WINDOW_CHOICES].map((list, i) => (
+          <div key={i} className="flex flex-wrap gap-1.5">
+            {list.map((c) => (
+              <button key={c} type="button" role="radio" aria-checked={choice === c} onClick={() => setChoice(c)} className={chip(choice === c)}>
+                {CHOICES[c].label}
+              </button>
+            ))}
+          </div>
         ))}
       </div>
+      {conflict && (
+        <Warning>
+          {conflict === "deur"
+            ? "Deze deur slaat tegen een andere deur. Draai één van beide om (F of H), of schuif ze uit elkaar."
+            : "Deze deur slaat tegen een muur. Draai ze de andere kant op (F), wissel de scharnieren (H) of schuif ze op."}
+        </Warning>
+      )}
       <LengthField
         label="Breedte"
         value={o.width}
         min={300}
-        max={6000}
+        max={8000}
         hint={
           <span className="inline-flex flex-wrap gap-1.5">
-            {widthsFor(o.kind).map((w) => (
+            {CHOICES[choice].widths.map((w) => (
               <button
                 key={w}
                 type="button"
@@ -487,17 +520,15 @@ function OpeningPanel({
         }
         onCommit={(mm) => apply({ width: mm }, "breedte")}
       />
+      {needsLintel(o, frame.wall) && (
+        <Warning>
+          Dit is een dragende muur en de opening is breder dan {formatMeters(LINTEL_LIMIT)}. Erboven is een latei of
+          stalen balk nodig. Laat die berekenen door een ingenieur of architect.
+        </Warning>
+      )}
       <div className="grid grid-cols-2 gap-2">
         {/* links of boven altijd eerst, zoals je het plan leest */}
-        {(() => {
-          const startField = (
-            <LengthField key="s" label={`Tot de hoek ${startWord}`} value={gaps.start} min={0} max={frame.len} onCommit={(mm) => apply({ offset: o.offset + (mm - gaps.start) }, "plaats")} />
-          );
-          const endField = (
-            <LengthField key="e" label={`Tot de hoek ${endWord}`} value={gaps.end} min={0} max={frame.len} onCommit={(mm) => apply({ offset: o.offset - (mm - gaps.end) }, "plaats")} />
-          );
-          return startWord === "links" || startWord === "boven" ? [startField, endField] : [endField, startField];
-        })()}
+        {startWord === "links" || startWord === "boven" ? [startField, endField] : [endField, startField]}
       </div>
       <div className="grid grid-cols-2 gap-2">
         <LengthField label="Hoogte" value={o.height} min={300} max={4000} onCommit={(mm) => apply({ height: mm }, "hoogte")} />
@@ -514,24 +545,28 @@ function OpeningPanel({
       </div>
       {o.kind === "door" && (
         <div className="flex flex-col gap-1.5">
-          <span className="text-[13px] font-medium text-ink-2">Draairichting</span>
+          <span className="text-[13px] font-medium text-ink-2">{turns ? "Draairichting" : "Richting"}</span>
           <div className="flex flex-wrap gap-2">
             <Button
               size="sm"
               variant="secondary"
               icon={<FlipVertical2 size={16} />}
+              title="Sneltoets F"
               onClick={() => apply({ swing: { ...swing, side: swing.side === "left" ? "right" : "left" } }, "draairichting")}
             >
-              Andere kant opendraaien
+              {turns ? "Andere kant opendraaien" : "Naar de andere kant"}
             </Button>
-            <Button
-              size="sm"
-              variant="secondary"
-              icon={<FlipHorizontal2 size={16} />}
-              onClick={() => apply({ swing: { ...swing, hinge: swing.hinge === "start" ? "end" : "start" } }, "scharnierkant")}
-            >
-              Scharnieren andere kant
-            </Button>
+            {choice !== "double" && choice !== "garage" && (
+              <Button
+                size="sm"
+                variant="secondary"
+                icon={<FlipHorizontal2 size={16} />}
+                title="Sneltoets H"
+                onClick={() => apply({ swing: { ...swing, hinge: swing.hinge === "start" ? "end" : "start" } }, "scharnierkant")}
+              >
+                {choice === "sliding" ? "Andere kant openschuiven" : "Scharnieren andere kant"}
+              </Button>
+            )}
           </div>
         </div>
       )}
@@ -539,5 +574,32 @@ function OpeningPanel({
         {label} {W.remove.toLowerCase()}
       </Button>
     </section>
+  );
+}
+
+/** Daglicht van een ruimte tegenover de Vlaamse norm (glas ≥ 1/12 van de vloer). */
+function DaylightInfo({ floor, analysis, roomId }: { floor: Floor; analysis: FloorAnalysis; roomId: string }) {
+  const d = roomDaylight(floor, analysis).get(roomId);
+  if (!d) return null;
+  return (
+    <div className="flex flex-col gap-1.5">
+      <div className="flex items-center gap-1">
+        <span className="text-[13px] font-medium text-ink-2">Daglicht</span>
+        <TermHelp term="Daglicht">
+          <p>
+            In Vlaanderen moet het glas van de ramen in een leefruimte of slaapkamer samen minstens 1/12 van de
+            vloeroppervlakte zijn.
+          </p>
+          <p>
+            We schatten het glas op {Math.round(GLASS_FACTOR * 100)} % van de raamopening (de rest is kader). Enkel
+            ramen in een buitenmuur tellen mee. Dit is een richtwaarde, geen officiële keuring.
+          </p>
+        </TermHelp>
+      </div>
+      <div className={`rounded-[var(--radius-control)] px-3 py-2 text-[13px] ${d.ok ? "bg-surface-2 text-ink" : "bg-warn-bg text-warn-ink"}`}>
+        <span className="tabular font-semibold">{formatArea(d.glass)}</span> glas, nodig {formatArea(d.needed)}
+        <span className="block text-[12px]">{d.ok ? "Voldoet aan de norm." : d.glass === 0 ? "Nog geen raam in een buitenmuur." : "Te weinig: maak een raam groter of voeg er een toe."}</span>
+      </div>
+    </div>
   );
 }
