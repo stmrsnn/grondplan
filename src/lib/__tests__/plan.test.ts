@@ -457,3 +457,40 @@ describe("muren in lagen, zoals op een bouwplan", () => {
     expect(Math.max(...ys)).toBe(4000);
   });
 });
+
+describe("eigen muurtypes", () => {
+  it("een gebruikt type dikker maken houdt de kamer even groot", async () => {
+    const { saveWallType, newCustomTypeId, typeUsage } = await import("../model/wallTypeOps");
+    const { createDoc } = await import("../model/doc");
+    const { setCustomWallTypes } = await import("../model/wallTypes");
+    const id = newCustomTypeId();
+    const t1 = {
+      id,
+      name: "Mijn gevel",
+      hint: "",
+      exterior: true,
+      loadBearing: true,
+      layers: [
+        { material: "gevelsteen" as const, thickness: 100 },
+        { material: "isolatie" as const, thickness: 140 },
+        { material: "kalkzandsteen" as const, thickness: 150 },
+      ],
+    };
+    let doc = saveWallType(createDoc("Test"), t1);
+    // een kamer van 5 × 4 met dit type
+    let gid = 0;
+    const f0 = placeRoom(doc.floors[0], { x: -195, y: -195 }, { x: 5195, y: 4195 }, { thickness: 390, height: 2600, kind: "exterior", loadBearing: true, type: id }, 90, () => `g${gid++}`).floor;
+    doc = { ...doc, floors: [f0] };
+    expect(typeUsage(doc, id)).toBe(4);
+    const before = analyzeFloor(f0).rooms[0].area;
+    // isolatie van 14 naar 20 cm
+    doc = saveWallType(doc, { ...t1, layers: [t1.layers[0], { material: "isolatie", thickness: 200 }, t1.layers[2]] });
+    const f1 = doc.floors[0];
+    expect(f1.walls.every((w) => w.thickness === 450)).toBe(true);
+    expect(analyzeFloor(f1).rooms[0].area).toBe(before);
+    // de isolatielaag is nu 20 cm breed in de tekening
+    const iso = analyzeFloor(f1).layers.filter((l) => l.material === "isolatie");
+    expect(iso).toHaveLength(4);
+    setCustomWallTypes([]);
+  });
+});

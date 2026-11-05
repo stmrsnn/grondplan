@@ -16,7 +16,10 @@ export type Material =
   | "wol" // zachte isolatie (minerale wol)
   | "spouw" // luchtspouw
   | "beton"
-  | "gips"; // gipskartonplaat
+  | "gips" // gipskartonplaat
+  | "cellenbeton"
+  | "kalkzandsteen"
+  | "hout"; // houtskelet, balken
 
 export interface Layer {
   material: Material;
@@ -44,7 +47,26 @@ export const MATERIAL_LABEL: Record<Material, string> = {
   spouw: "Luchtspouw",
   beton: "Beton",
   gips: "Gipsplaat",
+  cellenbeton: "Cellenbeton",
+  kalkzandsteen: "Kalkzandsteen",
+  hout: "Hout",
 };
+
+/** Materialen in een logische volgorde voor keuzelijsten. */
+export const MATERIALS: Material[] = [
+  "gevelsteen",
+  "baksteen",
+  "snelbouw",
+  "kalkzandsteen",
+  "cellenbeton",
+  "gipsblok",
+  "beton",
+  "spouw",
+  "isolatie",
+  "wol",
+  "hout",
+  "gips",
+];
 
 export const WALL_TYPES: WallType[] = [
   {
@@ -141,8 +163,56 @@ export const WALL_TYPES: WallType[] = [
 
 const BY_ID = new Map(WALL_TYPES.map((t) => [t.id, t]));
 
+/*
+ * Eigen muurtypes horen bij een project. De editor meldt ze hier aan, zodat
+ * de tekening (die enkel de verdieping kent) hun lagen vindt. Het versienummer
+ * zorgt dat tekeningen opnieuw berekend worden als een type wijzigt.
+ */
+let custom = new Map<string, WallType>();
+let customVersion = 0;
+
+export function setCustomWallTypes(types: readonly WallType[] | undefined): void {
+  const next = new Map((types ?? []).map((t) => [t.id, t]));
+  const same =
+    next.size === custom.size && [...next].every(([id, t]) => JSON.stringify(custom.get(id)) === JSON.stringify(t));
+  if (same) return;
+  custom = next;
+  customVersion++;
+}
+
+export function wallTypesVersion(): number {
+  return customVersion;
+}
+
+export function customWallTypes(): WallType[] {
+  return [...custom.values()];
+}
+
+export function isCustomType(id: string | undefined): boolean {
+  return !!id && custom.has(id);
+}
+
 export function wallType(id: string | undefined): WallType | null {
-  return (id && BY_ID.get(id)) || null;
+  return (id && (custom.get(id) ?? BY_ID.get(id))) || null;
+}
+
+/** Een eigen type uit een bewaard project nakijken: enkel geldige lagen en maten. */
+export function cleanWallType(raw: unknown): WallType | null {
+  if (!raw || typeof raw !== "object") return null;
+  const r = raw as Partial<WallType>;
+  if (typeof r.id !== "string" || !r.id.startsWith("eigen-") || typeof r.name !== "string") return null;
+  const layers = (Array.isArray(r.layers) ? r.layers : [])
+    .filter((l): l is Layer => !!l && MATERIALS.includes(l.material) && Number.isFinite(l.thickness) && l.thickness > 0)
+    .map((l) => ({ material: l.material, thickness: Math.round(Math.min(1000, l.thickness)) }));
+  if (layers.length === 0) return null;
+  return {
+    id: r.id,
+    name: r.name.slice(0, 60) || "Eigen muur",
+    hint: typeof r.hint === "string" ? r.hint.slice(0, 200) : "",
+    layers,
+    exterior: !!r.exterior,
+    loadBearing: !!r.loadBearing,
+  };
 }
 
 export function typeThickness(t: WallType): number {

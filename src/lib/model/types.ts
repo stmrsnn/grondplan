@@ -17,6 +17,8 @@
  */
 export const SCHEMA_VERSION = 4;
 
+import type { WallType } from "./wallTypes";
+
 export type Id = string;
 
 export interface ProjectDoc {
@@ -59,6 +61,8 @@ export interface ProjectSettings {
   wallDefaults: WallDefaults;
   /** Waar het noorden ligt, in graden met de klok mee vanaf "boven op het scherm". */
   northAngle: number;
+  /** Zelf samengestelde muurtypes (id begint met "eigen-"). */
+  customWallTypes?: WallType[];
 }
 
 export interface Floor {

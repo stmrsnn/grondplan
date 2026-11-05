@@ -1,7 +1,7 @@
 "use client";
 
 import { memo, useState } from "react";
-import { ArrowDown, ArrowLeft, ArrowUp, ImagePlus, Move, PanelRightClose, RotateCcw, RotateCw, Ruler, Trash2 } from "lucide-react";
+import { ArrowDown, ArrowLeft, ArrowUp, ImagePlus, Move, PanelRightClose, Plus, RotateCcw, RotateCw, Ruler, Trash2 } from "lucide-react";
 import { Button, IconButton } from "@/components/ui/Button";
 import { Field, Toggle } from "@/components/ui/Field";
 import { TermHelp } from "@/components/ui/Help";
@@ -22,7 +22,8 @@ import { Overview, SelectionPanel } from "./SelectionPanels";
 import { W } from "@/lib/words";
 import { LengthField } from "./LengthField";
 import { WallTypeSelect } from "./WallTypeSelect";
-import { typeThickness, wallType } from "@/lib/model/wallTypes";
+import { customWallTypes, typeThickness, wallType } from "@/lib/model/wallTypes";
+import { useWallTypeEditor } from "./WallTypeDialog";
 import { Compass } from "./NorthArrow";
 
 function PanelHeader({ title, onHide }: { title: string; onHide: () => void }) {
@@ -231,17 +232,17 @@ export const PropertiesPanel = memo(function PropertiesPanel({
         <Section title="Muren">
           <div className="flex items-start gap-1 text-[13px] leading-relaxed text-ink-2">
             <span>
-              Maten op het plan zijn <strong className="text-ink">binnenmaten</strong>: van muur tot
-              muur, zoals je zelf meet met een rolmeter.
+              Maten op het plan zijn <strong className="text-ink">binnenmaten in ruwbouw</strong>: van
+              muur tot muur, zonder pleisterwerk, zoals op een bouwplan.
             </span>
             <TermHelp term="Binnenmaten">
               <p>
-                Een binnenmaat meet je binnen in de kamer, van de ene afgewerkte muur tot de andere.
-                Zo meet iedereen thuis, en zo past je meubel ook echt.
+                Een binnenmaat meet je binnen in de kamer, van de ene muur tot de andere. Zoals op een
+                bouwplan is dat de ruwbouwmaat: tussen het metselwerk, vóór het pleisteren.
               </p>
               <p>
-                De dikte van de muren komt daar nog bij. Bij het afdrukken voor een aannemer zetten we
-                ook de buitenmaten op het plan.
+                Pleisterwerk is ongeveer 1,5 cm per wand. Een kamer van 4,00 m ruwbouw meet na het
+                pleisteren dus zo&apos;n 3,97 m. De buitenmaten staan in kettingen rond het gebouw.
               </p>
               <svg viewBox="0 0 220 90" className="w-full max-w-[260px]" aria-hidden="true">
                 <rect x="10" y="20" width="200" height="60" fill="none" stroke="var(--text)" strokeWidth="10" />
@@ -268,10 +269,8 @@ export const PropertiesPanel = memo(function PropertiesPanel({
               commit(setWallDefaults(s, { ...s.wallDefaults, interiorType: id, interior: typeThickness(t) }));
             }}
           />
-          <p className="text-[12px] leading-relaxed text-ink-3">
-            Alle maten op het plan zijn ruwbouwmaten, zoals op een bouwplan: zonder pleisterwerk (± 1,5 cm per
-            wand). Bestaande muren wijzig je per muur.
-          </p>
+          <OwnWallTypes />
+          <p className="text-[12px] leading-relaxed text-ink-3">Bestaande muren wijzig je per muur: klik een muur aan.</p>
         </Section>
 
         <Section title="Waar ligt het noorden?">
@@ -433,5 +432,36 @@ function UnderlaySection({
         </Button>
       </div>
     </Section>
+  );
+}
+
+/** Eigen muurtypes van dit project, met een knop om er een te maken. */
+function OwnWallTypes() {
+  const editor = useWallTypeEditor();
+  const own = customWallTypes();
+  if (!editor) return null;
+  return (
+    <div className="flex flex-col gap-1.5">
+      <span className="text-[13px] font-medium text-ink-2">Eigen muurtypes</span>
+      {own.length > 0 && (
+        <ul className="flex flex-col divide-y divide-line rounded-[var(--radius-control)] border border-line">
+          {own.map((t) => (
+            <li key={t.id}>
+              <button
+                type="button"
+                onClick={() => editor({ edit: t.id })}
+                className="flex w-full items-center justify-between gap-2 px-3 py-2 text-left text-[13px] hover:bg-surface-2"
+              >
+                <span className="truncate">{t.name}</span>
+                <span className="tabular shrink-0 text-ink-3">{(typeThickness(t) / 10).toLocaleString("nl-BE")} cm</span>
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+      <Button size="sm" variant="secondary" icon={<Plus size={16} />} className="self-start" onClick={() => editor({})}>
+        Nieuw muurtype
+      </Button>
+    </div>
   );
 }

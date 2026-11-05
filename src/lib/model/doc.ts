@@ -1,5 +1,5 @@
 import { addRectangle, functionLabel } from "../geometry/plan";
-import { DEFAULT_EXTERIOR_TYPE, DEFAULT_INTERIOR_TYPE, typeForThickness, typeThickness, wallType } from "./wallTypes";
+import { cleanWallType, DEFAULT_EXTERIOR_TYPE, DEFAULT_INTERIOR_TYPE, typeForThickness, typeThickness, wallType, type WallType } from "./wallTypes";
 import {
   SCHEMA_VERSION,
   type Floor,
@@ -127,6 +127,9 @@ export function migrateDoc(raw: unknown, fallbackName = "Naamloos project"): Pro
       wallDefaults:
         fromVersion < 4 ? { ...DEFAULT_SETTINGS.wallDefaults } : { ...DEFAULT_SETTINGS.wallDefaults, ...(s.wallDefaults ?? {}) },
       northAngle: isNum(s.northAngle) ? normalizeAngle(s.northAngle) : 0,
+      customWallTypes: Array.isArray(s.customWallTypes)
+        ? s.customWallTypes.map(cleanWallType).filter((t): t is WallType => t !== null)
+        : [],
     },
     floors: floors.map((f, i) => {
       const floor = { ...createFloor(`Verdieping ${i}`), ...f };

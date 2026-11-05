@@ -320,3 +320,38 @@ test.describe("overtrekken", () => {
     await expect(page.locator("svg[role=application] image[data-underlay]")).toBeVisible();
   });
 });
+
+test("eigen muurtype maken vanuit een muur en later dikker maken", async ({ page }) => {
+  const box = await canvas(page);
+  await page.keyboard.press("k");
+  await page.mouse.click(box.x + 600, box.y + 200);
+  await page.mouse.move(box.x + 800, box.y + 400);
+  await page.keyboard.type("5x4");
+  await page.keyboard.press("Enter");
+  await page.keyboard.press("Escape");
+  const o = await page.evaluate(() => {
+    const r = document.querySelector("svg[role=application] [data-walls]")!.getBoundingClientRect();
+    return { x0: r.x, y0: r.y, k: r.width / 5760 };
+  });
+  // bovenste gevel selecteren
+  await page.keyboard.press("v");
+  await page.mouse.click(o.x0 + 2500 * o.k, o.y0 + 190 * o.k);
+  await page.getByRole("combobox", { name: "Opbouw" }).selectOption("__nieuw");
+  const dlg = page.getByRole("dialog", { name: "Nieuw muurtype" });
+  await expect(dlg).toBeVisible();
+  await dlg.getByLabel("Naam").fill("Gevel met 20 cm PIR");
+  await dlg.getByLabel("Dikte laag 3 in cm").fill("20");
+  await dlg.getByRole("button", { name: "Bewaren" }).click();
+  // de muur krijgt meteen het nieuwe type: 9 + 3 + 20 + 14 = 46 cm
+  await expect(page.getByRole("textbox", { name: /^Totale dikte/ })).toHaveValue("0,46 m");
+  // de kamer blijft 5 × 4
+  for (let i = 0; i < 3; i++) await page.keyboard.press("Escape");
+  await expect(page.locator("aside ul li").first()).toContainText("20,0 m²");
+  // bewerken via de lijst bij het plan: binnenblad 14 → 19 cm
+  await page.getByRole("button", { name: /Gevel met 20 cm PIR/ }).click();
+  const dlg2 = page.getByRole("dialog", { name: "Muurtype bewerken" });
+  await dlg2.getByLabel("Dikte laag 4 in cm").fill("19");
+  await expect(dlg2.getByText(/Eén muur gebruikt dit type/)).toBeVisible();
+  await dlg2.getByRole("button", { name: "Bewaren" }).click();
+  await expect(page.locator("aside ul li").first()).toContainText("20,0 m²");
+});

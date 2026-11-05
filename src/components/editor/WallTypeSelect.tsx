@@ -1,6 +1,9 @@
 "use client";
 
-import { MATERIAL_LABEL, WALL_TYPES, typeThickness, wallType, type Layer } from "@/lib/model/wallTypes";
+import { Pencil } from "lucide-react";
+import { IconButton } from "@/components/ui/Button";
+import { customWallTypes, isCustomType, MATERIAL_LABEL, WALL_TYPES, typeThickness, wallType, type Layer } from "@/lib/model/wallTypes";
+import { useWallTypeEditor } from "./WallTypeDialog";
 
 const selectCls =
   "h-10 w-full rounded-[var(--radius-control)] border border-line bg-bg px-3 text-sm text-ink hover:border-line-strong focus:border-accent focus:outline-none";
@@ -60,10 +63,21 @@ export function WallTypeSelect({
   allowCustom?: boolean;
 }) {
   const t = wallType(value);
+  const editor = useWallTypeEditor();
+  const own = customWallTypes();
   return (
     <label className="flex flex-col gap-1.5">
       <span className="text-[13px] font-medium text-ink-2">{label}</span>
-      <select className={selectCls} value={t ? t.id : ""} onChange={(e) => e.target.value && onChange(e.target.value)}>
+      <span className="flex gap-1">
+      <select
+        className={selectCls}
+        value={t ? t.id : ""}
+        onChange={(e) => {
+          const v = e.target.value;
+          if (v === "__nieuw") editor?.({ onCreated: onChange });
+          else if (v) onChange(v);
+        }}
+      >
         {allowCustom && !t && <option value="">Eigen dikte</option>}
         <optgroup label="Gevels">
           {WALL_TYPES.filter((w) => w.exterior).map((w) => (
@@ -79,7 +93,23 @@ export function WallTypeSelect({
             </option>
           ))}
         </optgroup>
+        {own.length > 0 && (
+          <optgroup label="Eigen muurtypes">
+            {own.map((w) => (
+              <option key={w.id} value={w.id}>
+                {w.name}
+              </option>
+            ))}
+          </optgroup>
+        )}
+        {editor && <option value="__nieuw">＋ Nieuw muurtype…</option>}
       </select>
+      {editor && isCustomType(t?.id) && (
+        <IconButton label="Dit muurtype bewerken" onClick={() => editor({ edit: t!.id })}>
+          <Pencil size={16} />
+        </IconButton>
+      )}
+      </span>
       {t && <span className="text-[12px] text-ink-3">{t.hint}</span>}
     </label>
   );

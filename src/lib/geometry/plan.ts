@@ -11,7 +11,7 @@
  *  - rebuildFloor: alles samen na elke wijziging, ruimtes behouden hun naam.
  */
 import type { Floor, Id, Node, Room, Wall } from "../model/types";
-import { wallLayers, type Material } from "../model/wallTypes";
+import { wallLayers, wallTypesVersion, type Material } from "../model/wallTypes";
 import { clipToRect, signedArea } from "./polygon";
 import { add, cross, dot, length, scale, sub, type Vec } from "./vec";
 
@@ -713,13 +713,15 @@ export function pointInPolygon(p: Vec, poly: Vec[]): boolean {
 }
 
 /** Verdiepingen zijn onveranderlijk: dezelfde verdieping wordt nooit twee keer doorgerekend. */
-const analysisCache = new WeakMap<Floor, FloorAnalysis>();
+const analysisCache = new WeakMap<Floor, { version: number; result: FloorAnalysis }>();
 
 export function analyzeFloor(floor: Floor): FloorAnalysis {
+  // een gewijzigd eigen muurtype verandert de lagen, ook als de verdieping gelijk blijft
+  const version = wallTypesVersion();
   const hit = analysisCache.get(floor);
-  if (hit) return hit;
+  if (hit && hit.version === version) return hit.result;
   const result = computeAnalysis(floor);
-  analysisCache.set(floor, result);
+  analysisCache.set(floor, { version, result });
   return result;
 }
 

@@ -36,19 +36,22 @@ export const GhostFloor = memo(function GhostFloor({ analysis }: { analysis: Flo
 });
 
 /** Afstand tussen arceerlijnen op het scherm (px), per materiaal. */
-const HATCH: Partial<Record<Material, { gap: number; angle: number; kind: "lines" | "cross" | "dots" }>> = {
+export const HATCH: Partial<Record<Material, { gap: number; angle: number; kind: "lines" | "cross" | "dots" }>> = {
   gevelsteen: { gap: 5, angle: -45, kind: "lines" },
   baksteen: { gap: 6, angle: 45, kind: "lines" },
   snelbouw: { gap: 7, angle: 45, kind: "lines" },
   gipsblok: { gap: 12, angle: 45, kind: "lines" },
+  kalkzandsteen: { gap: 4, angle: 45, kind: "lines" },
   beton: { gap: 7, angle: 0, kind: "dots" },
+  cellenbeton: { gap: 10, angle: 0, kind: "dots" },
+  hout: { gap: 7, angle: 45, kind: "cross" },
 };
 
 /**
  * Arceringen per materiaal, zoals op een bouwplan. De lijnen staan altijd even
  * ver uit elkaar op het scherm (zoals op papier), ongeacht de zoom.
  */
-export const PlanPatterns = memo(function PlanPatterns({ zoom }: { zoom: number }) {
+export const PlanPatterns = memo(function PlanPatterns({ zoom, prefix = "hatch" }: { zoom: number; prefix?: string }) {
   // in stapjes, zodat niet elke scrolbeweging alles hertekent
   const z = Math.pow(2, Math.round(Math.log2(zoom) * 4) / 4);
   const px = (v: number) => v / z;
@@ -59,16 +62,17 @@ export const PlanPatterns = memo(function PlanPatterns({ zoom }: { zoom: number 
         const g = px(h.gap);
         if (h.kind === "dots")
           return (
-            <pattern key={m} id={`hatch-${m}`} patternUnits="userSpaceOnUse" width={g} height={g}>
+            <pattern key={m} id={`${prefix}-${m}`} patternUnits="userSpaceOnUse" width={g} height={g}>
               <rect width={g} height={g} fill="var(--plan-paper)" />
               <circle cx={g / 4} cy={g / 4} r={px(0.7)} fill="var(--plan-hatch)" />
               <circle cx={(3 * g) / 4} cy={(3 * g) / 4} r={px(0.5)} fill="var(--plan-hatch)" />
             </pattern>
           );
         return (
-          <pattern key={m} id={`hatch-${m}`} patternUnits="userSpaceOnUse" width={g} height={g} patternTransform={`rotate(${h.angle})`}>
+          <pattern key={m} id={`${prefix}-${m}`} patternUnits="userSpaceOnUse" width={g} height={g} patternTransform={`rotate(${h.angle})`}>
             <rect width={g} height={g} fill="var(--plan-paper)" />
             <line x1={0} y1={0} x2={0} y2={g} stroke="var(--plan-hatch)" strokeWidth={px(0.6)} />
+            {h.kind === "cross" && <line x1={0} y1={0} x2={g} y2={0} stroke="var(--plan-hatch)" strokeWidth={px(0.6)} />}
           </pattern>
         );
       })}

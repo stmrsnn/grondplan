@@ -16,7 +16,10 @@ import { EditorStore } from "@/lib/editor/store";
 import { DEFAULT_AREA, fitBounds, toScreen, toWorld, zoomAt, zoomPercent, type Viewport } from "@/lib/editor/viewport";
 import { formatMeters, parseLength } from "@/lib/format";
 import { analyzeFloor, functionLabel, moveNodes, rebuildFloor, stretch, type RoomInfo } from "@/lib/geometry/plan";
-import { addFloor, editFloor, renameProject, restoreVersion, updateRoom } from "@/lib/model/commands";
+import { addFloor, docCmd, editFloor, renameProject, restoreVersion, updateRoom } from "@/lib/model/commands";
+import { setCustomWallTypes, wallType } from "@/lib/model/wallTypes";
+import { canDeleteWallType, deleteWallType, newCustomTypeId, saveWallType, typeUsage } from "@/lib/model/wallTypeOps";
+import { WallTypeDialog, WallTypeEditorContext } from "./WallTypeDialog";
 import { floorsBottomUp } from "@/lib/model/doc";
 import type { Vec } from "@/lib/geometry/vec";
 import type { Floor, ProjectDoc, Underlay } from "@/lib/model/types";
@@ -81,6 +84,12 @@ export function Editor({ initialDoc, backend, email }: EditorProps) {
   const state = useSyncExternalStore(store.subscribe, store.getState, store.getState);
   const { doc, activeFloorId } = state;
   const floor = doc.floors.find((f) => f.id === activeFloorId) ?? doc.floors[0];
+  // eigen muurtypes van dit project aanmelden vóór er getekend wordt
+  setCustomWallTypes(doc.settings.customWallTypes);
+
+  // ---------- eigen muurtypes ----------
+  const [wallTypeEdit, setWallTypeEdit] = useState<{ edit?: string; onCreated?: (id: string) => void } | null>(null);
+  const openWallTypeEditor = useCallback((opts: { edit?: string; onCreated?: (id: string) => void }) => setWallTypeEdit(opts), []);
 
   // ---------- automatisch bewaren ----------
   const [saveStatus, setSaveStatus] = useState<SaveStatus>("saved");
@@ -446,6 +455,7 @@ export function Editor({ initialDoc, backend, email }: EditorProps) {
   };
 
   return (
+    <WallTypeEditorContext.Provider value={openWallTypeEditor}>
     <div className="flex h-dvh flex-col overflow-hidden">
       <header className="flex h-14 shrink-0 items-center gap-2 border-b border-line bg-bg px-2 sm:px-3">
         <Link
@@ -805,6 +815,33 @@ export function Editor({ initialDoc, backend, email }: EditorProps) {
         )}
       </div>
 
+      {wallTypeEdit && (
+        <WallTypeDialog
+          initial={wallTypeEdit.edit ? (wallType(wallTypeEdit.edit) ?? null) : null}
+          usage={wallTypeEdit.edit ? typeUsage(doc, wallTypeEdit.edit) : 0}
+          canDelete={wallTypeEdit.edit ? canDeleteWallType(doc, wallTypeEdit.edit) : false}
+          onClose={() => setWallTypeEdit(null)}
+          onSave={(t) => {
+            const isNew = !t.id;
+            const full = { ...t, id: t.id ?? newCustomTypeId() };
+            const after = saveWallType(doc, full);
+            store.execute(
+              docCmd(doc, after, isNew ? `Muurtype "${full.name}" gemaakt` : `Muurtype "${full.name}" aangepast`, `Muurtype "${full.name}": ongedaan`, `Muurtype "${full.name}": opnieuw`),
+            );
+            store.seal();
+            setWallTypeEdit(null);
+            if (isNew) wallTypeEdit.onCreated?.(full.id);
+            toast.show(isNew ? `Muurtype "${full.name}" gemaakt` : `Muurtype "${full.name}" bewaard`);
+          }}
+          onDelete={() => {
+            const id = wallTypeEdit.edit!;
+            const name = wallType(id)?.name ?? "Muurtype";
+            store.execute(docCmd(doc, deleteWallType(doc, id), `Muurtype "${name}" verwijderd`, `Muurtype "${name}" teruggezet`, `Muurtype "${name}" opnieuw verwijderd`));
+            store.seal();
+            setWallTypeEdit(null);
+          }}
+        />
+      )}
       {underlayOpen && <UnderlayDialog open onClose={() => setUnderlayOpen(false)} onDone={placeUnderlay} />}
       <VersionsDialog
         open={versionsOpen}
@@ -872,6 +909,7 @@ export function Editor({ initialDoc, backend, email }: EditorProps) {
         </p>
       </Dialog>
     </div>
+    </WallTypeEditorContext.Provider>
   );
 }
 

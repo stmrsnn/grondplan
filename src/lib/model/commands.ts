@@ -208,3 +208,14 @@ export function updateWall(
       })),
   };
 }
+
+/** Een wijziging over het hele document (bv. een muurtype met al zijn muren). */
+export function docCmd(before: ProjectDoc, after: ProjectDoc, label: string, undoMessage: string, redoMessage: string): Cmd {
+  return {
+    label,
+    undoMessage,
+    redoMessage,
+    apply: () => after,
+    revert: () => before,
+  };
+}
