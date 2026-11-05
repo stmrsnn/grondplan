@@ -18,7 +18,9 @@ import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js
 import { pointInPolygon } from "@/lib/geometry/plan";
 import type { Vec } from "@/lib/geometry/vec";
 import { FACADES, FLOORS } from "@/lib/model/finishes";
+import type { FurnitureDef } from "@/lib/furniture/library";
 import type { Part } from "@/lib/three/build";
+import { buildFurniture, mergeParts, type FMat } from "./furniture3d";
 
 export type ViewMode = "doll" | "walk";
 
@@ -135,6 +137,29 @@ function noiseTexture(color: string, meters: number, amount: number, grain = 2) 
   });
 }
 
+/** Houtnerf langs de lengte, in de kleur van het hout. */
+const woodCache = new Map<string, THREE.Texture>();
+function woodTexture(color: string) {
+  let t = woodCache.get(color);
+  if (t) return t;
+  const base = hsl(color);
+  t = texture([512, 512], [1, 1], (g, w, h) => {
+    g.fillStyle = hslStr(base.h, base.s * 0.8, base.l);
+    g.fillRect(0, 0, w, h);
+    for (let k = 0; k < 90; k++) {
+      const y = rnd() * h;
+      g.strokeStyle = hslStr(base.h, base.s * 0.85, base.l + (rnd() - 0.6) * 0.14, 0.25 + rnd() * 0.3);
+      g.lineWidth = 0.6 + rnd() * 2.2;
+      g.beginPath();
+      g.moveTo(0, y);
+      for (let x = 0; x <= w; x += 32) g.lineTo(x, y + Math.sin(x / 60 + k) * 3 + (rnd() - 0.5) * 2);
+      g.stroke();
+    }
+  });
+  woodCache.set(color, t);
+  return t;
+}
+
 function brickTexture(color: string, joint: string) {
   const base = hsl(color);
   // 4 stenen van 21 cm breed en 8 lagen van 6,5 cm, met voegen van 1 cm
@@ -167,6 +192,23 @@ function brickTexture(color: string, joint: string) {
 class Materials {
   private cache = new Map<string, THREE.Material>();
   private paintNoise = noiseTexture("#ffffff", 1.2, 0.025, 1);
+  /** Fijne weefstructuur voor stoffen (grijswaarden, de kleur komt van het materiaal). */
+  weave = texture([256, 256], [0.25, 0.25], (g, w, h) => {
+    g.fillStyle = "#ededed";
+    g.fillRect(0, 0, w, h);
+    for (let y = 0; y < h; y += 2) {
+      g.fillStyle = `rgba(0,0,0,${0.04 + rnd() * 0.05})`;
+      g.fillRect(0, y, w, 1);
+    }
+    for (let x = 0; x < w; x += 2) {
+      g.fillStyle = `rgba(255,255,255,${0.04 + rnd() * 0.05})`;
+      g.fillRect(x, 0, 1, h);
+    }
+    for (let k = 0; k < 3000; k++) {
+      g.fillStyle = `rgba(0,0,0,${rnd() * 0.06})`;
+      g.fillRect(rnd() * w, rnd() * h, 2, 1);
+    }
+  });
 
   get(key: string): THREE.Material {
     let m = this.cache.get(key);
@@ -179,6 +221,22 @@ class Materials {
 
   private make(key: string): THREE.Material {
     const std = (p: THREE.MeshStandardMaterialParameters) => new THREE.MeshStandardMaterial(p);
+    const phys = (p: THREE.MeshPhysicalMaterialParameters) => new THREE.MeshPhysicalMaterial(p);
+    if (key.startsWith("stof:")) {
+      const c = new THREE.Color(key.slice(5));
+      return phys({ color: c, map: this.weave, roughness: 0.95, sheen: 0.35, sheenRoughness: 0.8, sheenColor: c.clone().lerp(new THREE.Color(0xffffff), 0.15) });
+    }
+    if (key.startsWith("hout:")) return std({ map: woodTexture(key.slice(5)), roughness: 0.55 });
+    if (key.startsWith("lak:")) return phys({ color: new THREE.Color(key.slice(4)), roughness: 0.38, clearcoat: 0.25, clearcoatRoughness: 0.4 });
+    if (key.startsWith("metaal:")) {
+      const c = new THREE.Color(key.slice(7));
+      const dark = c.getHSL({ h: 0, s: 0, l: 0 }).l < 0.2;
+      return std({ color: c, metalness: dark ? 0.5 : 0.9, roughness: dark ? 0.45 : 0.3 });
+    }
+    if (key.startsWith("boek:")) {
+      const cols = ["#7d3b2e", "#2f4a63", "#c9b48a", "#3c5a40", "#d8d2c4", "#8a6a3b", "#1f2124", "#a5603d"];
+      return std({ color: cols[Number(key.slice(5)) % cols.length], roughness: 0.75 });
+    }
     if (key.startsWith("verf:")) return std({ color: new THREE.Color(key.slice(5)), map: this.paintNoise, roughness: 0.93 });
     if (key.startsWith("vloer:")) {
       const f = FLOORS.find((x) => x.id === key.slice(6)) ?? FLOORS[0];
@@ -193,6 +251,28 @@ class Materials {
       return std({ map: brickTexture(f.color, f.joint), roughness: 0.85 });
     }
     switch (key) {
+      case "chroom":
+        return std({ color: 0xeeeeee, metalness: 1, roughness: 0.08 });
+      case "inox":
+        return std({ color: 0xc8cacc, metalness: 1, roughness: 0.32 });
+      case "keramiek":
+        return phys({ color: 0xf7f7f5, roughness: 0.15, clearcoat: 0.7, clearcoatRoughness: 0.1 });
+      case "zwartglas":
+        return phys({ color: 0x0c0d0f, roughness: 0.06, metalness: 0.1, clearcoat: 1 });
+      case "spiegel":
+        return std({ color: 0xdfe6ea, metalness: 1, roughness: 0.03 });
+      case "steen":
+        return std({ map: noiseTexture("#d8d4cc", 0.6, 0.03, 1), roughness: 0.28 });
+      case "linnen":
+        return phys({ color: 0xf2efe8, map: this.weave, roughness: 0.95, sheen: 0.5, sheenRoughness: 0.8, sheenColor: new THREE.Color(0xffffff) });
+      case "loof":
+        return std({ color: 0x4d7a3c, roughness: 0.55, side: THREE.DoubleSide });
+      case "aarde":
+        return std({ color: 0x3a2c21, roughness: 1 });
+      case "pot":
+        return std({ color: 0xd9d3c8, roughness: 0.45 });
+      case "kap":
+        return std({ color: 0xf3eee2, roughness: 0.85, side: THREE.DoubleSide, emissive: new THREE.Color(0x2a2418) });
       case "plint":
         return std({ color: 0xf3f2ee, roughness: 0.6 });
       case "pleister":
@@ -228,6 +308,7 @@ class Materials {
       m.dispose();
     }
     this.paintNoise.dispose();
+    this.weave.dispose();
     this.cache.clear();
   }
 }
@@ -317,6 +398,8 @@ function flatGeometry(poly: Vec[], y: number, down: boolean): THREE.BufferGeomet
 
 export interface ViewerCallbacks {
   onPickRoom?: (roomId: string | null) => void;
+  /** Een meubel aangeklikt. */
+  onPickItem?: (itemId: string) => void;
   onModeChange?: (m: ViewMode) => void;
 }
 
@@ -552,6 +635,8 @@ export class Viewer {
     cancelAnimationFrame(this.raf);
     this.unbind();
     this.clearModel();
+    for (const parts of this.itemGeo.values()) parts.forEach((p) => p.geo.dispose());
+    this.itemGeo.clear();
     this.mats.dispose();
     this.sky.dispose();
     this.controls.dispose();
@@ -685,6 +770,11 @@ export class Viewer {
       this.down = null;
       if (!d || d.moved) return;
       const hit = this.pick(e);
+      const item = hit && itemOf(hit.object);
+      if (item) {
+        this.cb.onPickItem?.(item);
+        return;
+      }
       if (this.mode === "walk" && hit) {
         // klik op de vloer: daarheen wandelen
         this.walk.target = { x: hit.point.x, z: hit.point.z };
@@ -726,10 +816,68 @@ export class Viewer {
     const ray = new THREE.Raycaster();
     ray.setFromCamera(ndc, this.camera);
     // wat er eerst geraakt wordt; enkel een vloer telt
-    const all = ray.intersectObjects(this.model.children, true).filter((h) => h.object.visible && (h.object.parent?.visible ?? true));
+    const all = ray.intersectObjects([...this.model.children, this.items], true).filter((h) => h.object.visible && (h.object.parent?.visible ?? true));
     const first = all[0];
-    return first && first.object.userData.room ? first : null;
+    return first && (first.object.userData.room || itemOf(first.object)) ? first : null;
   }
+
+  /* ---------------- meubels ---------------- */
+
+  private items = new THREE.Group();
+  private itemGeo = new Map<string, { mat: FMat; geo: THREE.BufferGeometry }[]>();
+
+  /** Meubels (opnieuw) zetten; modellen worden onthouden per soort, maat en kleur. */
+  setItems(list: Item3d[]) {
+    if (!this.items.parent) this.scene.add(this.items);
+    this.items.clear();
+    const used = new Set<string>();
+    for (const it of list) {
+      const key = `${it.def.id}|${it.width}|${it.depth}|${it.height}|${it.color}`;
+      used.add(key);
+      let parts = this.itemGeo.get(key);
+      if (!parts) {
+        parts = mergeParts(buildFurniture(it.def, it.width, it.depth, it.height, { color: it.color }));
+        this.itemGeo.set(key, parts);
+      }
+      const g = new THREE.Group();
+      g.userData.item = it.id;
+      for (const p of parts) {
+        const m = new THREE.Mesh(p.geo, this.mats.get(p.mat));
+        const see = p.mat === "glas" || p.mat === "spiegel";
+        m.castShadow = !see && p.mat !== "kap";
+        m.receiveShadow = true;
+        g.add(m);
+      }
+      g.position.set(it.x * M, it.y * M, it.z * M);
+      g.rotation.y = (-it.rotation * Math.PI) / 180;
+      this.items.add(g);
+    }
+    // modellen die niet meer gebruikt worden opruimen
+    for (const [k, parts] of this.itemGeo) if (!used.has(k)) {
+      parts.forEach((p) => p.geo.dispose());
+      this.itemGeo.delete(k);
+    }
+    this.dirty = true;
+  }
+}
+
+/** Plaats van een meubel in 3D (mm), met zijn soort en kleur. */
+export interface Item3d {
+  id: string;
+  def: FurnitureDef;
+  x: number;
+  y: number;
+  z: number;
+  rotation: number;
+  width: number;
+  depth: number;
+  height: number;
+  color: string;
+}
+
+function itemOf(o: THREE.Object3D | null): string | null {
+  for (let x: THREE.Object3D | null = o; x; x = x.parent) if (x.userData.item) return x.userData.item as string;
+  return null;
 }
 
 function isSoftwareRenderer(r: THREE.WebGLRenderer): boolean {

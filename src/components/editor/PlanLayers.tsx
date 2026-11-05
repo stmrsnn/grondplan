@@ -18,6 +18,7 @@ export type Selection =
   | { kind: "room"; id: Id }
   | { kind: "node"; id: Id }
   | { kind: "opening"; id: Id }
+  | { kind: "item"; id: Id }
   | null;
 
 /** De verdieping eronder, heel licht, als houvast bij het tekenen van een verdieping. */

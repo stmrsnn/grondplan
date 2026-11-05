@@ -442,3 +442,37 @@ test("het plan in 3D: poppenhuis, rondwandelen en een vloer kiezen", async ({ pa
   await expect(page.locator("[data-view3d]")).toHaveCount(0);
   expect(errors).toEqual([]);
 });
+
+test("inrichten: een bed tegen de muur zetten, draaien, kopiëren en verwijderen", async ({ page }) => {
+  const box = await canvas(page);
+  await page.keyboard.press("k");
+  await page.mouse.click(box.x + 600, box.y + 200);
+  await page.mouse.move(box.x + 800, box.y + 400);
+  await page.keyboard.type("5x4");
+  await page.keyboard.press("Enter");
+  await page.keyboard.press("Escape");
+  const o = await page.evaluate(() => {
+    const p = document.querySelector("svg[role=application] [data-walls]")!;
+    const r = p.getBoundingClientRect();
+    return { x0: r.x, y0: r.y, k: r.width / 5760 };
+  });
+  await page.keyboard.press("i");
+  await page.getByRole("tab", { name: "Slapen" }).click();
+  await page.getByRole("radio", { name: "Bed 160 × 200" }).click();
+  // dicht bij de bovenmuur klikken (naast de maatlabels): het bed kleeft er met het hoofdeinde tegen
+  const at = { x: o.x0 + 1800 * o.k, y: o.y0 + (380 + 700) * o.k };
+  await page.mouse.move(at.x, at.y);
+  await page.mouse.click(at.x, at.y);
+  await expect(page.locator("[data-item]")).toHaveCount(1);
+  await page.keyboard.press("v");
+  await page.mouse.click(o.x0 + 1500 * o.k, o.y0 + (380 + 1200) * o.k);
+  await expect(page.getByRole("heading", { name: "Bed 160 × 200" })).toBeVisible();
+  await page.getByRole("radio", { name: "Blauw" }).click();
+  await expect(page.getByRole("radio", { name: "Blauw" })).toHaveAttribute("aria-checked", "true");
+  await page.keyboard.press("Control+d");
+  await expect(page.locator("[data-item]")).toHaveCount(2);
+  await page.keyboard.press("Delete");
+  await expect(page.locator("[data-item]")).toHaveCount(1);
+  await page.keyboard.press("Control+z");
+  await expect(page.locator("[data-item]")).toHaveCount(2);
+});

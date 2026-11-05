@@ -1,9 +1,11 @@
 import { addRectangle, functionLabel } from "../geometry/plan";
+import { cleanItem } from "../furniture/place";
 import { cleanFrame, cleanFrameType, type FrameType } from "./frames";
 import { cleanWallType, DEFAULT_EXTERIOR_TYPE, DEFAULT_INTERIOR_TYPE, typeForThickness, typeThickness, wallType, type WallType } from "./wallTypes";
 import {
   SCHEMA_VERSION,
   type Floor,
+  type Item,
   type ProjectDoc,
   type ProjectSettings,
   type StartChoice,
@@ -143,6 +145,8 @@ export function migrateDoc(raw: unknown, fallbackName = "Naamloos project"): Pro
           const type = w.type ?? typeForThickness(w.thickness, w.kind);
           return type ? { ...w, type } : w;
         });
+      // meubels nakijken (onbekende of kapotte vallen weg)
+      floor.items = (Array.isArray(floor.items) ? floor.items : []).map(cleanItem).filter((x): x is Item => x !== null);
       // samengestelde ramen nakijken (een kapotte samenstelling valt weg: dan een gewoon raam)
       floor.openings = (floor.openings ?? []).map((o) => {
         if (o.frame === undefined) return o;

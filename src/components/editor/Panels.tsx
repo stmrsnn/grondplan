@@ -103,6 +103,7 @@ export const PropertiesPanel = memo(function PropertiesPanel({
             selection={selection}
             analysis={analysis}
             onDelete={onDelete}
+            onSelectItem={(id) => setSelection({ kind: "item", id })}
           />
         </div>
       ) : (

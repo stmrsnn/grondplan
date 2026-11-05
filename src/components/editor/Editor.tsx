@@ -34,6 +34,8 @@ import { Compass } from "./NorthArrow";
 import { PropertiesPanel, type UnderlayMode } from "./Panels";
 import { PlanCanvas, type ToolPointerEvent } from "./PlanCanvas";
 import { View3D } from "./View3D";
+import { FurnitureLayer } from "./FurnitureLayer";
+import { itemGaps } from "@/lib/furniture/place";
 import { UnderlayDialog, type UnderlayResult } from "./UnderlayDialog";
 import { Annotations, Chip, FloorLayer, GhostFloor, Guides, OpeningLabels, OpeningsLayer, PlanPatterns, SnapMarker, type FacadeOpening, type Selection } from "./PlanLayers";
 import { doorConflicts, needsLintel, openingMarks, openingShape, roomDaylight, type OpeningShape } from "@/lib/geometry/openings";
@@ -330,6 +332,12 @@ export function Editor({ initialDoc, backend, email }: EditorProps) {
     [setTool],
   );
   const analysis = useMemo(() => analyzeFloor(shownFloor), [shownFloor]);
+  // vrije ruimte rond het gekozen (of verschoven) meubel
+  const itemGapList = useMemo(() => {
+    const id = selection?.kind === "item" ? selection.id : null;
+    const it = tools.preview.item ?? (id ? shownFloor.items.find((x) => x.id === id) : null);
+    return it ? itemGaps(shownFloor, it) : [];
+  }, [selection, tools.preview.item, shownFloor]);
   const openingShapes = useMemo(
     () => shownFloor.openings.map((o) => openingShape(shownFloor, o)).filter((x): x is OpeningShape => x !== null),
     [shownFloor],
@@ -377,7 +385,9 @@ export function Editor({ initialDoc, backend, email }: EditorProps) {
           ? floor.walls.some((w) => w.id === selection.id)
           : selection.kind === "opening"
             ? floor.openings.some((o) => o.id === selection.id)
-            : floor.nodes.some((n) => n.id === selection.id);
+            : selection.kind === "item"
+              ? floor.items.some((it) => it.id === selection.id)
+              : floor.nodes.some((n) => n.id === selection.id);
     // eslint-disable-next-line react-hooks/set-state-in-effect -- verouderde selectie opruimen
     if (!exists) setSelection(null);
   }, [floor, selection]);
@@ -676,6 +686,30 @@ export function Editor({ initialDoc, backend, email }: EditorProps) {
                     text="Dragende muur: latei nodig"
                   />
                 )}
+                {tools.preview.against && (
+                  // de muur waartegen het meubel kleeft
+                  <line
+                    x1={toScreen(v, tools.preview.against.a).x}
+                    y1={toScreen(v, tools.preview.against.a).y}
+                    x2={toScreen(v, tools.preview.against.b).x}
+                    y2={toScreen(v, tools.preview.against.b).y}
+                    stroke="var(--accent)"
+                    strokeWidth={2}
+                    strokeDasharray="6 4"
+                    pointerEvents="none"
+                  />
+                )}
+                {itemGapList.map((g, i) => {
+                  const a = toScreen(v, g.from);
+                  const b = toScreen(v, g.to);
+                  if (Math.hypot(b.x - a.x, b.y - a.y) < 18) return null;
+                  return (
+                    <g key={`gap${i}`} pointerEvents="none">
+                      <line x1={a.x} y1={a.y} x2={b.x} y2={b.y} stroke="var(--accent)" strokeWidth={1} strokeDasharray="3 3" />
+                      <Chip at={{ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 }} text={formatMeters(g.value)} />
+                    </g>
+                  );
+                })}
                 {tools.preview.snap && <Guides guides={tools.preview.snap.guides} view={v} />}
                 {tools.preview.snap && tools.tool !== "select" && <SnapMarker snap={tools.preview.snap} view={v} />}
                 {selection?.kind === "node" && analysis.nodeById.get(selection.id) && (
@@ -734,6 +768,7 @@ export function Editor({ initialDoc, backend, email }: EditorProps) {
                 ) : null
               }
             />
+            <FurnitureLayer items={shownFloor.items} selection={selection} hover={tools.hover} ghost={tools.preview.item} />
             <OpeningsLayer shapes={openingShapes} selection={selection} hover={tools.hover} ghost={ghostOpening} conflicts={conflicts} />
             {tools.preview.chain && (
               <g opacity={0.7}>
@@ -838,6 +873,7 @@ export function Editor({ initialDoc, backend, email }: EditorProps) {
               doc={doc}
               floor={floor}
               onPickRoom={(id) => setSelection(id && floor.rooms.some((r) => r.id === id) ? { kind: "room", id } : null)}
+              onPickItem={(id) => floor.items.some((x) => x.id === id) && setSelection({ kind: "item", id })}
             />
           )}
 
@@ -854,6 +890,8 @@ export function Editor({ initialDoc, backend, email }: EditorProps) {
             setOpeningChoice={tools.setOpeningChoice}
             openingWidth={tools.openingWidth}
             setOpeningWidth={tools.setOpeningWidth}
+            furniture={tools.furniture}
+            setFurniture={tools.setFurniture}
           />}
 
           <div className="pointer-events-none absolute inset-x-0 top-3 z-20 flex items-start justify-between gap-2 px-3">

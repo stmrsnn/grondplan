@@ -4,6 +4,7 @@ import { FlipHorizontal2, FlipVertical2, SlidersHorizontal, Trash2 } from "lucid
 import { describeFrame, mirrorFrame } from "@/lib/model/frames";
 import { ChoiceTiles } from "./ChoiceTiles";
 import { Swatches } from "./Swatches";
+import { ItemPanel } from "./ItemPanel";
 import { FLOORS, floorOf, floorSwatch, WALL_COLORS, wallColorOf } from "@/lib/model/finishes";
 import { useFrameEditor } from "./FrameDialog";
 import { FramePreview } from "./FramePreview";
@@ -85,6 +86,7 @@ export function SelectionPanel({
   selection,
   analysis,
   onDelete,
+  onSelectItem,
 }: {
   store: EditorStore;
   doc: ProjectDoc;
@@ -92,6 +94,7 @@ export function SelectionPanel({
   selection: NonNullable<Selection>;
   analysis: FloorAnalysis;
   onDelete: () => void;
+  onSelectItem?: (id: string) => void;
 }) {
   const commit = (cmd: Parameters<EditorStore["execute"]>[0]) => {
     store.execute(cmd);
@@ -173,6 +176,10 @@ export function SelectionPanel({
         </Button>
       </section>
     );
+  }
+
+  if (selection.kind === "item") {
+    return <ItemPanel key={selection.id} store={store} floor={floor} itemId={selection.id} onDelete={onDelete} onSelect={(id) => onSelectItem?.(id)} />;
   }
 
   if (selection.kind === "opening") {

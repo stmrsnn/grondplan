@@ -1,6 +1,7 @@
 "use client";
 
-import { DoorOpen, Grid2x2, MousePointer2, PenLine, Square } from "lucide-react";
+import { DoorOpen, Grid2x2, MousePointer2, PenLine, Sofa, Square } from "lucide-react";
+import { FurniturePicker } from "./FurniturePicker";
 import { formatMeters } from "@/lib/format";
 import { choiceInfo, isChoice, type OpeningChoice } from "@/lib/geometry/openings";
 import { ChoiceTiles } from "./ChoiceTiles";
@@ -13,6 +14,13 @@ const TOOLS: { id: Tool; label: string; key: string; icon: React.ReactNode; hint
   { id: "wall", label: "Muur", key: "M", icon: <PenLine size={18} />, hint: "Klik punt na punt; typ een lengte en Enter" },
   { id: "door", label: "Deur", key: "D", icon: <DoorOpen size={18} />, hint: "Klik op een muur. Een binnendeur draait naar de kant van je cursor, een buitendeur naar binnen." },
   { id: "window", label: "Raam", key: "R", icon: <Grid2x2 size={18} />, hint: "Klik op een muur om een raam te plaatsen" },
+  {
+    id: "furniture",
+    label: "Inrichten",
+    key: "I",
+    icon: <Sofa size={18} />,
+    hint: "Kies een meubel en klik in een kamer. Tegen een muur kleeft het vanzelf; R draait een kwartslag.",
+  },
 ];
 
 const cm = (mm: number) => `${Math.round(mm / 10)}`;
@@ -34,6 +42,8 @@ export function ToolRail({
   setOpeningChoice,
   openingWidth,
   setOpeningWidth,
+  furniture,
+  setFurniture,
 }: {
   tool: Tool;
   setTool: (t: Tool) => void;
@@ -47,6 +57,8 @@ export function ToolRail({
   setOpeningChoice: (c: { door: OpeningChoice; window: OpeningChoice }) => void;
   openingWidth: Partial<Record<OpeningChoice, number>>;
   setOpeningWidth: (w: Partial<Record<OpeningChoice, number>>) => void;
+  furniture: string | null;
+  setFurniture: (id: string | null) => void;
 }) {
   const group = tool === "door" ? "door" : tool === "window" ? "window" : null;
   const picked = group ? openingChoice[group] : null;
@@ -81,7 +93,7 @@ export function ToolRail({
       </div>
 
       {tool !== "select" && (
-        <div className="pointer-events-auto flex max-w-[260px] flex-col gap-2 rounded-[var(--radius-card)] border border-line bg-bg p-3 text-[12px] text-ink-2 shadow-[var(--shadow-float)]">
+        <div className={`pointer-events-auto flex ${tool === "furniture" ? "w-[290px]" : "max-w-[260px]"} flex-col gap-2 rounded-[var(--radius-card)] border border-line bg-bg p-3 text-[12px] text-ink-2 shadow-[var(--shadow-float)]`}>
           <span>{template ? `Klik waar de linkerbovenhoek van de ${template.label.toLowerCase()} moet komen` : active.hint}</span>
           {tool === "room" && (
             <div className="flex flex-col gap-1.5">
@@ -138,6 +150,7 @@ export function ToolRail({
               </div>
             </>
           )}
+          {tool === "furniture" && <FurniturePicker value={furniture} onPick={setFurniture} />}
           {tool === "wall" && (
             <div className="flex rounded-[var(--radius-control)] bg-surface-2 p-0.5" role="radiogroup" aria-label="Soort muur">
               {(["interior", "exterior"] as const).map((k) => (
@@ -162,7 +175,13 @@ export function ToolRail({
               Enter om te tekenen
             </span>
           ) : (
-            <span className="text-ink-3">{group ? "Esc stopt · daarna slepen om te verschuiven" : "Esc stopt · Shift = vrije hoek"}</span>
+            <span className="text-ink-3">
+              {tool === "furniture"
+                ? "Esc stopt · daarna slepen om te verschuiven, Ctrl+D kopieert"
+                : group
+                  ? "Esc stopt · daarna slepen om te verschuiven"
+                  : "Esc stopt · Shift = vrije hoek"}
+            </span>
           )}
         </div>
       )}

@@ -43,11 +43,13 @@ import {
 import { closestOnSegment, distance, dot, snapValue, type Vec } from "@/lib/geometry/vec";
 import { editFloor } from "@/lib/model/commands";
 import { mirrorFrame } from "@/lib/model/frames";
-import type { Floor, Id, Opening, ProjectDoc } from "@/lib/model/types";
+import type { Floor, Id, Item, Opening, ProjectDoc } from "@/lib/model/types";
+import { furnitureDef } from "@/lib/furniture/library";
+import { addItem, hitItem, newItem, removeItem, snapItem, updateItem } from "@/lib/furniture/place";
 import type { ToolPointerEvent } from "./PlanCanvas";
 import type { Selection } from "./PlanLayers";
 
-export type Tool = "select" | "wall" | "room" | "door" | "window";
+export type Tool = "select" | "wall" | "room" | "door" | "window" | "furniture";
 
 /** Standaardkamer om te "stempelen": binnenmaten in mm en de functie. */
 export interface RoomTemplate {
@@ -78,6 +80,9 @@ export interface ToolPreview {
   chip: { at: Vec; text: string } | null;
   /** Deur of raam dat geplaatst zou worden. */
   opening?: Opening | null;
+  /** Meubel dat geplaatst of verschoven wordt, en de muur waartegen het kleeft. */
+  item?: Item | null;
+  against?: { a: Vec; b: Vec } | null;
 }
 
 const EMPTY: ToolPreview = { snap: null, chain: null, rect: null, chip: null };
@@ -91,6 +96,9 @@ export function hitTest(floor: Floor, p: Vec, zoom: number): Selection {
   }
   const o = hitOpening(floor, p, 4 / zoom);
   if (o) return { kind: "opening", id: o.id };
+  // meubels staan binnen de muren: eerst kijken (behalve een tapijt, dat komt na de muren)
+  const it = hitItem(floor, p, 2 / zoom);
+  if (it && furnitureDef(it.libraryRef)?.shape !== "tapijt") return { kind: "item", id: it.id };
   const byId = new Map(floor.nodes.map((n) => [n.id, n]));
   let best: { id: Id; d: number } | null = null;
   for (const w of floor.walls) {
@@ -102,6 +110,7 @@ export function hitTest(floor: Floor, p: Vec, zoom: number): Selection {
     if (c.dist < w.thickness / 2 + 4 / zoom && (!best || c.dist < best.d)) best = { id: w.id, d: c.dist };
   }
   if (best) return { kind: "wall", id: best.id };
+  if (it) return { kind: "item", id: it.id };
   for (const r of analyzeFloor(floor).rooms) if (pointInPolygon(p, r.inner)) return { kind: "room", id: r.room.id };
   return null;
 }
@@ -150,7 +159,10 @@ export function usePlanTools({ store, doc, floor, view, selection, setSelection,
   const chain = useRef<Vec[] | null>(null);
   const roomStart = useRef<Vec | null>(null);
   const roomDragged = useRef(false);
-  const drag = useRef<{ kind: "node" | "wall" | "opening"; id: Id; start: Vec; base: Floor; moved: boolean } | null>(null);
+  const drag = useRef<{ kind: "node" | "wall" | "opening" | "item"; id: Id; start: Vec; base: Floor; moved: boolean } | null>(null);
+  /** Gekozen meubel bij het gereedschap Inrichten, en de draaiing van een vrij meubel. */
+  const [furniture, setFurnitureState] = useState<string | null>(null);
+  const furnitureRot = useRef(0);
   const lastCursor = useRef<Vec | null>(null);
 
   const s = doc.settings;
@@ -391,6 +403,28 @@ export function usePlanTools({ store, doc, floor, view, selection, setSelection,
       }
       lastCursor.current = e.world;
 
+      if (tool === "furniture") {
+        const def = furniture ? furnitureDef(furniture) : null;
+        if (!def) return false;
+        if (e.phase === "hover" || e.phase === "move" || e.phase === "down") {
+          const sn = snapItem(floor, def, { width: def.w, depth: def.d }, e.world, furnitureRot.current, { grid: grid ?? 50 });
+          const ghost = newItem(def, sn, sn.rotation, "voorbeeld");
+          setPreview({ ...EMPTY, item: ghost, against: sn.against ?? null });
+          return true;
+        }
+        if (e.phase === "cancel") {
+          setPreview(EMPTY);
+          return true;
+        }
+        if (e.phase === "up") {
+          const sn = snapItem(floor, def, { width: def.w, depth: def.d }, e.world, furnitureRot.current, { grid: grid ?? 50 });
+          const it = newItem(def, sn, sn.rotation, globalThis.crypto.randomUUID());
+          commit(addItem(floor, it), `${def.name} geplaatst`, `${def.name} weggehaald`, `${def.name} opnieuw geplaatst`);
+          return true;
+        }
+        return false;
+      }
+
       if (tool === "door" || tool === "window") {
         const picked = tool === "window" ? openingChoice.window : openingChoice.door;
         // een eigen soort die intussen verwijderd is: terug naar de standaard
@@ -518,7 +552,7 @@ export function usePlanTools({ store, doc, floor, view, selection, setSelection,
       }
       if (e.phase === "down") {
         const hit = hitTest(floor, e.world, zoom);
-        if (hit && (hit.kind === "node" || hit.kind === "wall" || hit.kind === "opening")) {
+        if (hit && (hit.kind === "node" || hit.kind === "wall" || hit.kind === "opening" || hit.kind === "item")) {
           drag.current = { kind: hit.kind, id: hit.id, start: e.world, base: floor, moved: false };
           setSelection(hit);
           return true;
@@ -530,6 +564,17 @@ export function usePlanTools({ store, doc, floor, view, selection, setSelection,
       if (e.phase === "move") {
         if (!d.moved && distance(d.start, e.world) * zoom < 4) return true;
         d.moved = true;
+        if (d.kind === "item") {
+          // verschuiven; tegen een muur kleeft het (en draait mee), vrij valt het op het raster
+          const cur = d.base.items.find((x) => x.id === d.id);
+          const def = cur && furnitureDef(cur.libraryRef);
+          if (!cur || !def) return true;
+          const to = { x: cur.x + e.world.x - d.start.x, y: cur.y + e.world.y - d.start.y };
+          const sn = snapItem(d.base, def, cur, to, cur.rotation, { grid: grid ?? 10 });
+          setDraft(updateItem(d.base, d.id, { x: sn.x, y: sn.y, rotation: sn.rotation }));
+          setPreview({ ...EMPTY, against: sn.against ?? null });
+          return true;
+        }
         if (d.kind === "opening") {
           // langs de muur schuiven, of naar een andere muur
           const cur = d.base.openings.find((x) => x.id === d.id);
@@ -580,6 +625,12 @@ export function usePlanTools({ store, doc, floor, view, selection, setSelection,
         setPreview(EMPTY);
         const cur = draftRef.current;
         setDraft(null);
+        if (cur && d.moved && e.phase === "up" && d.kind === "item") {
+          const it = cur.items.find((x) => x.id === d.id);
+          const name = (it && furnitureDef(it.libraryRef)?.name) ?? "Meubel";
+          commit(cur, `${name} verschoven`, `${name} teruggezet`, `${name} opnieuw verschoven`);
+          return true;
+        }
         if (cur && d.moved && e.phase === "up" && d.kind === "opening") {
           const moved = cur.openings.find((x) => x.id === d.id);
           const label = moved ? openingName(moved) : "Opening";
@@ -605,7 +656,7 @@ export function usePlanTools({ store, doc, floor, view, selection, setSelection,
       }
       return false;
     },
-    [view, tool, template, floor, snap, grid, wallPreview, addSegment, innerChip, commitRoom, preview.rect, setSelection, commit, setDraft, s.wallDefaults.exterior, openingChoice, openingAt, toast],
+    [view, tool, template, floor, snap, grid, wallPreview, addSegment, innerChip, commitRoom, preview.rect, setSelection, commit, setDraft, s.wallDefaults.exterior, openingChoice, openingAt, toast, furniture],
   );
 
   /* ---------------- toetsenbord ---------------- */
@@ -626,6 +677,10 @@ export function usePlanTools({ store, doc, floor, view, selection, setSelection,
       const o = floor.openings.find((x) => x.id === selection.id);
       const label = o ? openingName(o) : "Opening";
       commit(removeOpening(floor, selection.id), `${label} verwijderd`, `${label} teruggezet`, `${label} weer verwijderd`);
+    } else if (selection.kind === "item") {
+      const it = floor.items.find((x) => x.id === selection.id);
+      const name = (it && furnitureDef(it.libraryRef)?.name) ?? "Meubel";
+      commit(removeItem(floor, selection.id), `${name} verwijderd`, `${name} teruggezet`, `${name} weer verwijderd`);
     } else if (selection.kind === "node") {
       const ids = new Set(floor.walls.filter((w) => w.start === selection.id || w.end === selection.id).map((w) => w.id));
       commit(removeWalls(floor, ids), "Hoek en muren verwijderd", "Hoek teruggezet", "Hoek weer verwijderd");
@@ -636,6 +691,11 @@ export function usePlanTools({ store, doc, floor, view, selection, setSelection,
   const nudge = useCallback(
     (dx: number, dy: number) => {
       if (!selection || selection.kind === "room") return;
+      if (selection.kind === "item") {
+        const it = floor.items.find((x) => x.id === selection.id);
+        if (it) commit(updateItem(floor, it.id, { x: it.x + dx, y: it.y + dy }), "Verschoven", "Terug op de vorige plaats", "Opnieuw verschoven");
+        return;
+      }
       if (selection.kind === "opening") {
         const o = floor.openings.find((x) => x.id === selection.id);
         const f = o && wallFrame(floor, o.wall);
@@ -709,8 +769,30 @@ export function usePlanTools({ store, doc, floor, view, selection, setSelection,
         else setSelection(null);
         return true;
       }
-      if (e.ctrlKey || e.metaKey || e.altKey) return false;
       const key = k.toLowerCase();
+      // meubel kopiëren
+      if ((e.ctrlKey || e.metaKey) && key === "d" && selection?.kind === "item") {
+        const it = floor.items.find((x) => x.id === selection.id);
+        if (!it) return false;
+        const copy = { ...it, id: globalThis.crypto.randomUUID(), x: it.x + 300, y: it.y + 300 };
+        const name = furnitureDef(it.libraryRef)?.name ?? "Meubel";
+        commit(addItem(floor, copy), `${name} gekopieerd`, "Kopie weggehaald", `${name} opnieuw gekopieerd`);
+        setSelection({ kind: "item", id: copy.id });
+        return true;
+      }
+      if (e.ctrlKey || e.metaKey || e.altKey) return false;
+      // R draait een meubel een kwartslag (bij het plaatsen of een gekozen meubel)
+      if (key === "r" && tool === "furniture") {
+        furnitureRot.current = (furnitureRot.current + 90) % 360;
+        if (lastCursor.current) onTool({ phase: "hover", world: lastCursor.current, screen: { x: 0, y: 0 }, shift: false, alt: false, pointerType: "mouse" });
+        return true;
+      }
+      if (key === "r" && selection?.kind === "item") {
+        const it = floor.items.find((x) => x.id === selection.id);
+        if (it) commit(updateItem(floor, it.id, { rotation: (it.rotation + 90) % 360 }), "Gedraaid", "Teruggedraaid", "Opnieuw gedraaid");
+        return true;
+      }
+      if (key === "i") return setTool("furniture"), true;
       if (key === "v") return setTool("select"), true;
       if (key === "m") return setTool("wall"), true;
       if (key === "k") return setTool("room"), true;
@@ -749,7 +831,7 @@ export function usePlanTools({ store, doc, floor, view, selection, setSelection,
       }
       return false;
     },
-    [tool, buffer, applyBuffer, setTool, selection, deleteSelection, nudge, grid, setSelection, template, justDrawn, floor, commit],
+    [tool, buffer, applyBuffer, setTool, selection, deleteSelection, nudge, grid, setSelection, template, justDrawn, floor, commit, onTool],
   );
 
   const cursor = tool === "select" ? (hover ? "pointer" : "grab") : "crosshair";
@@ -775,6 +857,13 @@ export function usePlanTools({ store, doc, floor, view, selection, setSelection,
     setOpeningChoice,
     openingWidth,
     setOpeningWidth,
+    furniture,
+    setFurniture: (id: string | null) => {
+      setFurnitureState(id);
+      furnitureRot.current = 0;
+      setToolState("furniture");
+      setSelection(null);
+    },
   };
 }
 

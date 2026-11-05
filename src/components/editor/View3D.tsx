@@ -5,7 +5,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { Vec } from "@/lib/geometry/vec";
 import type { Floor, ProjectDoc } from "@/lib/model/types";
 import { buildFloor3d, type Part } from "@/lib/three/build";
-import type { Viewer, ViewMode } from "./three/viewer";
+import type { Item3d, Viewer, ViewMode } from "./three/viewer";
+import { finishColor, furnitureDef } from "@/lib/furniture/library";
 
 /** Uit welke richting de zon komt (op het plan): het zuidwesten, volgens het noorden van het project. */
 function sunDirection(northAngle: number): Vec {
@@ -25,10 +26,12 @@ export function View3D({
   doc,
   floor,
   onPickRoom,
+  onPickItem,
 }: {
   doc: ProjectDoc;
   floor: Floor;
   onPickRoom: (roomId: string | null) => void;
+  onPickItem?: (itemId: string) => void;
 }) {
   const host = useRef<HTMLDivElement>(null);
   const viewer = useRef<Viewer | null>(null);
@@ -39,15 +42,29 @@ export function View3D({
   /** Het model staat in de scène (voor de testen en het laadbericht). */
   const [built, setBuilt] = useState(false);
   const pick = useRef(onPickRoom);
+  const pickItem = useRef(onPickItem);
   useEffect(() => {
     pick.current = onPickRoom;
-  }, [onPickRoom]);
+    pickItem.current = onPickItem;
+  }, [onPickRoom, onPickItem]);
 
   const parts = useMemo<Part[]>(() => {
     const floors = doc.floors.filter((f) => f.elevation <= floor.elevation).sort((a, b) => a.elevation - b.elevation);
     return floors.flatMap((f) => buildFloor3d(f, { facade: doc.settings.facade, elevation: f.elevation }));
   }, [doc.floors, doc.settings.facade, floor.elevation]);
   const sun = useMemo(() => sunDirection(doc.settings.northAngle), [doc.settings.northAngle]);
+  const items = useMemo<Item3d[]>(() => {
+    const out: Item3d[] = [];
+    for (const f of doc.floors) {
+      if (f.elevation > floor.elevation) continue;
+      for (const it of f.items) {
+        const def = furnitureDef(it.libraryRef);
+        if (!def) continue;
+        out.push({ id: it.id, def, x: it.x, y: f.elevation, z: it.y, rotation: it.rotation, width: it.width, depth: it.depth, height: it.height, color: finishColor(def, it.color).color });
+      }
+    }
+    return out;
+  }, [doc.floors, floor.elevation]);
 
   // de kijker aanmaken (three.js wordt pas nu geladen)
   useEffect(() => {
@@ -57,7 +74,7 @@ export function View3D({
       .then(({ Viewer }) => {
         if (!alive || !host.current) return;
         try {
-          viewer.current = new Viewer(host.current, { onPickRoom: (id) => pick.current(id) });
+          viewer.current = new Viewer(host.current, { onPickRoom: (id) => pick.current(id), onPickItem: (id) => pickItem.current?.(id) });
         } catch {
           setFailed(true);
           return;
@@ -80,12 +97,13 @@ export function View3D({
     const v = viewer.current;
     if (!loaded || !v) return;
     v.setParts(parts, sun);
+    v.setItems(items);
     if (!framed.current) {
       v.frame();
       framed.current = true;
       setBuilt(true);
     }
-  }, [loaded, parts, sun]);
+  }, [loaded, parts, sun, items]);
 
   useEffect(() => {
     if (loaded) viewer.current?.setMode(mode);
