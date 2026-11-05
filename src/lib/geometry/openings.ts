@@ -890,3 +890,29 @@ export function choicePreview(c: OpeningChoice): { frame: Frame; width: number; 
   const f = frameOf({ kind: info.kind, variant: info.variant });
   return f ? { frame: f, width: info.kind === "door" ? width + 2 * DOOR_FRAME : width, height } : null;
 }
+
+/**
+ * Waar een opening in de muur zit, voor de 3D-weergave: een punt op afstand
+ * t langs de muur en `depth` vanaf het buitenvlak, het kader en de binnenkant.
+ */
+export function openingAnchor(floor: Floor, o: Opening) {
+  const f = wallFrame(floor, o.wall);
+  if (!f) return null;
+  const sec = section(floor, f);
+  const T = sec.T;
+  const span = openingSpan(o);
+  const t0 = o.offset - span / 2;
+  const t1 = o.offset + span / 2;
+  const swing = o.swing ?? { side: "left" as const, hinge: "start" as const };
+  const swingDepth = sec.depthOfSide(swing.side);
+  const viewDepth = sec.exterior ? T : swingDepth;
+  const isDoorLike = o.kind === "door" && !o.frame;
+  // kader: in het isolatievlak bij een gevel; binnendeur over de hele muur; anders in het midden
+  const fd0 = sec.exterior ? sec.frameAt : isDoorLike ? 0 : Math.max(0, (T - FRAME_DEPTH) / 2);
+  const fd1 = sec.exterior ? sec.frameAt + FRAME_DEPTH : isDoorLike ? T : fd0 + FRAME_DEPTH;
+  const a0 = sec.at(0, viewDepth);
+  const facing = sub(sec.at(0, viewDepth + (viewDepth === 0 ? 1 : -1)), a0);
+  const right = { x: -facing.y, y: facing.x };
+  const ltr = dot(right, sub(sec.at(1, viewDepth), a0)) > 0;
+  return { at: sec.at, T, t0, t1, fd0, fd1, exterior: sec.exterior, viewDepth, ltr, wallHeight: f.wall.height };
+}

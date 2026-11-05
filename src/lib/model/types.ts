@@ -66,6 +66,8 @@ export interface ProjectSettings {
   customWallTypes?: WallType[];
   /** Zelf samengestelde ramen en deuren. */
   customFrameTypes?: FrameType[];
+  /** Gevelmateriaal (zie finishes.ts); leeg = rode baksteen. */
+  facade?: string;
 }
 
 export interface Floor {
@@ -169,6 +171,8 @@ export interface Room {
   name: string;
   function: string;
   floorFinish: string;
+  /** Kleur van de muren (zie finishes.ts); leeg = standaard voor de functie. */
+  wallColor?: string;
 }
 
 export interface Item {

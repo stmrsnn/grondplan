@@ -15,7 +15,11 @@ export default defineConfig({
     baseURL: `http://localhost:${port}`,
     locale: "nl-BE",
     viewport: { width: 1440, height: 900 },
-    launchOptions: process.env.PW_CHROMIUM_PATH ? { executablePath: process.env.PW_CHROMIUM_PATH } : {},
+    // WebGL zonder grafische kaart (voor de 3D-weergave)
+    launchOptions: {
+      args: ["--use-gl=angle", "--use-angle=swiftshader", "--enable-unsafe-swiftshader"],
+      ...(process.env.PW_CHROMIUM_PATH ? { executablePath: process.env.PW_CHROMIUM_PATH } : {}),
+    },
   },
   projects: [
     { name: "laptop", use: { ...devices["Desktop Chrome"], viewport: { width: 1440, height: 900 } }, grepInvert: /@tablet/ },

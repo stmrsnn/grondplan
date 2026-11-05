@@ -162,8 +162,8 @@ export function editFloor(
 export function updateRoom(
   floorId: Id,
   roomId: Id,
-  from: Partial<Pick<Room, "name" | "function" | "floorFinish">>,
-  to: Partial<Pick<Room, "name" | "function" | "floorFinish">>,
+  from: Partial<Pick<Room, "name" | "function" | "floorFinish" | "wallColor">>,
+  to: Partial<Pick<Room, "name" | "function" | "floorFinish" | "wallColor">>,
 ): Cmd {
   const keys = Object.keys(to) as (keyof typeof to)[];
   return {
@@ -218,4 +218,8 @@ export function docCmd(before: ProjectDoc, after: ProjectDoc, label: string, und
     apply: () => after,
     revert: () => before,
   };
+}
+
+export function setFacade(s: ProjectSettings, facade: string): Cmd {
+  return settingsCmd(s, { ...s, facade }, "Gevel");
 }

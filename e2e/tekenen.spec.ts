@@ -415,3 +415,30 @@ test("een raam samenstellen: vast + draaikiep, en bewaren als eigen soort", asyn
   await page.keyboard.press("r");
   await expect(page.getByRole("radio", { name: "Leefruimteraam" })).toBeVisible();
 });
+
+test("het plan in 3D: poppenhuis, rondwandelen en een vloer kiezen", async ({ page }) => {
+  test.setTimeout(90_000);
+  await page.addInitScript(() => localStorage.setItem("hint-tekenvlak", "gezien"));
+  const errors: string[] = [];
+  page.on("pageerror", (e) => errors.push(e.message));
+  await page.goto("/proefbank?demo=1");
+  await page.getByRole("radio", { name: "3D" }).click();
+  await expect(page.locator("[data-view3d=klaar]")).toBeVisible({ timeout: 60_000 });
+  await expect(page.getByRole("img", { name: "3D-weergave van het plan" })).toBeVisible();
+  // een ruimte aanklikken: de vloer en muurkleur kiezen
+  const main = (await page.getByRole("main", { name: "Plan" }).boundingBox())!;
+  await page.mouse.click(main.x + main.width * 0.4, main.y + main.height * 0.45);
+  const vloer = page.getByRole("radiogroup", { name: "Vloer" });
+  await expect(vloer).toBeVisible();
+  await vloer.getByRole("radio", { name: "Tegels antraciet" }).click();
+  await expect(vloer.getByRole("radio", { name: "Tegels antraciet" })).toHaveAttribute("aria-checked", "true");
+  await page.getByRole("radio", { name: "Rondwandelen" }).click();
+  await expect(page.getByText(/Klik op de vloer om erheen te wandelen/)).toBeVisible();
+  await page.keyboard.down("w");
+  await page.waitForTimeout(300);
+  await page.keyboard.up("w");
+  // terug naar het plan
+  await page.getByRole("radio", { name: "2D" }).click();
+  await expect(page.locator("[data-view3d]")).toHaveCount(0);
+  expect(errors).toEqual([]);
+});

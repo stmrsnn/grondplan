@@ -10,6 +10,7 @@ import {
   addFloor,
   editFloor,
   removeFloor,
+  setFacade,
   setNorth,
   setSnap,
   setWallDefaults,
@@ -25,6 +26,8 @@ import { WallTypeSelect } from "./WallTypeSelect";
 import { customWallTypes, typeThickness, wallType } from "@/lib/model/wallTypes";
 import { useWallTypeEditor } from "./WallTypeDialog";
 import { Compass } from "./NorthArrow";
+import { Swatches } from "./Swatches";
+import { FACADES, facadeOf, facadeSwatch } from "@/lib/model/finishes";
 
 function PanelHeader({ title, onHide }: { title: string; onHide: () => void }) {
   return (
@@ -271,6 +274,17 @@ export const PropertiesPanel = memo(function PropertiesPanel({
           />
           <OwnWallTypes />
           <p className="text-[12px] leading-relaxed text-ink-3">Bestaande muren wijzig je per muur: klik een muur aan.</p>
+        </Section>
+
+        <Section title="Gevel">
+          <Swatches
+            label="Gevelsteen"
+            note={facadeOf(s.facade).label}
+            value={facadeOf(s.facade).id}
+            options={FACADES.map((f) => ({ id: f.id, label: f.label, background: facadeSwatch(f) }))}
+            onPick={(id) => commit(setFacade(s, id))}
+          />
+          <p className="text-[12px] leading-relaxed text-ink-3">Zie je in 3D. Vloeren en muurkleuren kies je per ruimte: klik een ruimte aan.</p>
         </Section>
 
         <Section title="Waar ligt het noorden?">

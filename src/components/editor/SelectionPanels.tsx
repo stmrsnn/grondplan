@@ -3,6 +3,8 @@
 import { FlipHorizontal2, FlipVertical2, SlidersHorizontal, Trash2 } from "lucide-react";
 import { describeFrame, mirrorFrame } from "@/lib/model/frames";
 import { ChoiceTiles } from "./ChoiceTiles";
+import { Swatches } from "./Swatches";
+import { FLOORS, floorOf, floorSwatch, WALL_COLORS, wallColorOf } from "@/lib/model/finishes";
 import { useFrameEditor } from "./FrameDialog";
 import { FramePreview } from "./FramePreview";
 import { Button } from "@/components/ui/Button";
@@ -14,7 +16,6 @@ import { useState } from "react";
 import {
   floorAreas,
   setWallThickness,
-  FLOOR_FINISHES,
   functionLabel,
   ROOM_FUNCTIONS,
   type FloorAnalysis,
@@ -149,22 +150,20 @@ export function SelectionPanel({
             if (!e.target.value.trim()) commit(updateRoom(floor.id, room.id, { name: "" }, { name: functionLabel(room.function) }));
           }}
         />
-        <label className="flex flex-col gap-1.5">
-          <span className="text-[13px] font-medium text-ink-2">Vloer</span>
-          <select
-            className={selectCls}
-            value={room.floorFinish}
-            onChange={(e) =>
-              commit(updateRoom(floor.id, room.id, { floorFinish: room.floorFinish }, { floorFinish: e.target.value }))
-            }
-          >
-            {FLOOR_FINISHES.map(([v, l]) => (
-              <option key={v} value={v}>
-                {l}
-              </option>
-            ))}
-          </select>
-        </label>
+        <Swatches
+          label="Vloer"
+          note={floorOf(room).label + (room.floorFinish ? "" : " (standaard)")}
+          value={floorOf(room).id}
+          options={FLOORS.map((f) => ({ id: f.id, label: f.label, background: floorSwatch(f) }))}
+          onPick={(id) => commit(updateRoom(floor.id, room.id, { floorFinish: room.floorFinish }, { floorFinish: id }))}
+        />
+        <Swatches
+          label="Muurkleur"
+          note={wallColorOf(room).label + (room.wallColor ? "" : " (standaard)")}
+          value={wallColorOf(room).id}
+          options={WALL_COLORS.map((c) => ({ id: c.id, label: c.label, background: c.color }))}
+          onPick={(id) => commit(updateRoom(floor.id, room.id, { wallColor: room.wallColor }, { wallColor: id }))}
+        />
         <p className="text-[12px] leading-relaxed text-ink-3">
           Een maat aanpassen? Klik op een maat in het plan en typ de nieuwe. De muur ernaast schuift
           mee, de rest van het plan ook.

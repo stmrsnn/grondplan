@@ -33,6 +33,7 @@ import type { EditorBackend } from "./backend";
 import { Compass } from "./NorthArrow";
 import { PropertiesPanel, type UnderlayMode } from "./Panels";
 import { PlanCanvas, type ToolPointerEvent } from "./PlanCanvas";
+import { View3D } from "./View3D";
 import { UnderlayDialog, type UnderlayResult } from "./UnderlayDialog";
 import { Annotations, Chip, FloorLayer, GhostFloor, Guides, OpeningLabels, OpeningsLayer, PlanPatterns, SnapMarker, type FacadeOpening, type Selection } from "./PlanLayers";
 import { doorConflicts, needsLintel, openingMarks, openingShape, roomDaylight, type OpeningShape } from "@/lib/geometry/openings";
@@ -176,6 +177,8 @@ export function Editor({ initialDoc, backend, email }: EditorProps) {
 
   // ---------- tekenen en selecteren ----------
   const [selection, setSelection] = useState<Selection>(null);
+  /** Het plan in 3D bekijken in plaats van tekenen. */
+  const [show3d, setShow3d] = useState(false);
   const tools = usePlanTools({ store, doc, floor, view, selection, setSelection, toast: toast.show });
   const shownFloor = tools.draft ?? floor;
 
@@ -421,6 +424,17 @@ export function Editor({ initialDoc, backend, email }: EditorProps) {
   // ---------- sneltoetsen ----------
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      // in 3D gebruiken de pijltjes en W A S D het rondwandelen, niet het tekenen
+      if (show3d) {
+        const mod3 = e.metaKey || e.ctrlKey;
+        const k3 = e.key.toLowerCase();
+        if (mod3 && (k3 === "z" || k3 === "y") && !isTyping(e.target)) {
+          e.preventDefault();
+          if (k3 === "y" || e.shiftKey) redo();
+          else undo();
+        }
+        return;
+      }
       if (!isTyping(e.target) && !(e.target instanceof HTMLSelectElement) && tools.onKey(e)) {
         e.preventDefault();
         return;
@@ -441,7 +455,7 @@ export function Editor({ initialDoc, backend, email }: EditorProps) {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [undo, redo, zoomBy, fit, tools]);
+  }, [undo, redo, zoomBy, fit, tools, show3d]);
 
   // ---------- rechterbalk ----------
   const [right, setRight] = useState(true);
@@ -819,7 +833,15 @@ export function Editor({ initialDoc, backend, email }: EditorProps) {
             />
           )}
 
-          <ToolRail
+          {show3d && (
+            <View3D
+              doc={doc}
+              floor={floor}
+              onPickRoom={(id) => setSelection(id && floor.rooms.some((r) => r.id === id) ? { kind: "room", id } : null)}
+            />
+          )}
+
+          {!show3d && <ToolRail
             tool={tools.tool}
             setTool={tools.setTool}
             wallChoice={tools.wallChoice}
@@ -832,14 +854,35 @@ export function Editor({ initialDoc, backend, email }: EditorProps) {
             setOpeningChoice={tools.setOpeningChoice}
             openingWidth={tools.openingWidth}
             setOpeningWidth={tools.setOpeningWidth}
-          />
+          />}
 
-          <div className="pointer-events-none absolute inset-x-0 top-3 flex items-start justify-between gap-2 px-3">
+          <div className="pointer-events-none absolute inset-x-0 top-3 z-20 flex items-start justify-between gap-2 px-3">
             <div className="pointer-events-auto" title="Noorden (aanpassen bij Eigenschappen)">
-              <Compass angle={doc.settings.northAngle} />
+              {!show3d && <Compass angle={doc.settings.northAngle} />}
             </div>
-            <div className="overflow-x-auto">
-              <Toolbar
+            <div className="pointer-events-auto flex items-center gap-2 overflow-x-auto">
+              <div
+                className="flex shrink-0 rounded-[var(--radius-control)] border border-line bg-bg p-0.5 text-[13px] font-medium shadow-[var(--shadow-float)]"
+                role="radiogroup"
+                aria-label="Weergave"
+              >
+                {([false, true] as const).map((v) => (
+                  <button
+                    key={String(v)}
+                    type="button"
+                    role="radio"
+                    aria-checked={show3d === v}
+                    onClick={() => {
+                      setShow3d(v);
+                      if (v) tools.setTool("select");
+                    }}
+                    className={`h-9 rounded-[6px] px-3 ${show3d === v ? "bg-accent text-on-accent" : "text-ink-2 hover:text-ink"}`}
+                  >
+                    {v ? "3D" : "2D"}
+                  </button>
+                ))}
+              </div>
+              {!show3d && <Toolbar
                 canUndo={state.canUndo}
                 canRedo={state.canRedo}
                 undoLabel={state.undoLabel}
@@ -850,7 +893,7 @@ export function Editor({ initialDoc, backend, email }: EditorProps) {
                 onZoomIn={() => zoomBy(1.25)}
                 onZoomOut={() => zoomBy(0.8)}
                 onFit={fit}
-              />
+              />}
             </div>
             <div className="pointer-events-auto">
               {!right && (

@@ -914,7 +914,7 @@ function computeAnalysis(floor: Floor): FloorAnalysis {
 }
 
 /** Houdt het deel van een veelhoek waar dot(p, n) ≥ c. */
-function clipHalf(poly: Vec[], n: Vec, c: number): Vec[] {
+export function clipHalf(poly: Vec[], n: Vec, c: number): Vec[] {
   const out: Vec[] = [];
   for (let i = 0; i < poly.length; i++) {
     const a = poly[i];
