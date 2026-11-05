@@ -80,9 +80,9 @@ describe("deuren en ramen", () => {
     const leaf = sh.leaves[0];
     expect(Math.round(Math.hypot(leaf.tip.x - leaf.hinge.x, leaf.tip.y - leaf.hinge.y))).toBe(830);
     expect(Math.round(Math.hypot(leaf.to.x - leaf.hinge.x, leaf.to.y - leaf.hinge.y))).toBe(830);
-    // de uitsparing is precies zo breed als de deur en zo dik als de muur
+    // de uitsparing is de ruwbouwopening (blad + kader aan beide kanten) en zo dik als de muur
     const [c0, c1, , c3] = sh.cut;
-    expect(Math.round(Math.hypot(c1.x - c0.x, c1.y - c0.y))).toBe(830);
+    expect(Math.round(Math.hypot(c1.x - c0.x, c1.y - c0.y))).toBe(930);
     expect(Math.round(Math.hypot(c3.x - c0.x, c3.y - c0.y))).toBe(350);
   });
 
@@ -154,10 +154,12 @@ describe("soorten, botsingen en daglicht", () => {
     const s1 = openingShape(sl, sl.openings[0])!;
     expect(s1.leaves).toHaveLength(0);
     expect(s1.panels).toHaveLength(1);
-    expect(s1.dashed).toHaveLength(1);
+    expect(s1.dashed).toHaveLength(4);
     const sw = addOpening(f, { ...door(bottom.id, 3000), ...choiceProps("slidingWindow", "exterior") }, "r")!;
-    // schuifraam: twee vlakken + twee vleugels
-    expect(openingShape(sw, sw.openings[0])!.lines).toHaveLength(4);
+    // schuifraam: twee stijlen + twee vleugels, en per vleugel een glaslijn
+    const ss = openingShape(sw, sw.openings[0])!;
+    expect(ss.frames).toHaveLength(4);
+    expect(ss.glass).toHaveLength(2);
   });
 
   it("latei nodig bij een brede opening in een dragende muur", () => {
@@ -180,13 +182,13 @@ describe("soorten, botsingen en daglicht", () => {
       return { f, left: side(-175), right: side(w + 175) };
     };
     const inward = (f: Floor, wallId: string) => roomSide(f, wallFrame(f, wallId)!)!;
-    // twee deuren tegenover elkaar in een gang van 1,2 m: ze slaan tegen elkaar
-    const h1 = hall(1200);
+    // twee deuren tegenover elkaar in een gang van 1 m: ze slaan tegen elkaar
+    const h1 = hall(1000);
     let g = addOpening(h1.f, door(h1.left.id, 2000, { swing: { side: inward(h1.f, h1.left.id), hinge: "start" } }), "a")!;
     g = addOpening(g, door(h1.right.id, 2000, { swing: { side: inward(g, h1.right.id), hinge: "end" } }), "b")!;
     expect(doorConflicts(g).get("a")).toBe("deur");
-    // één deur in een gang van 70 cm: slaat tegen de muur aan de overkant
-    const h2 = hall(700);
+    // één deur in een gang van 50 cm: slaat tegen de muur aan de overkant
+    const h2 = hall(500);
     const k = addOpening(h2.f, door(h2.left.id, 2000, { swing: { side: inward(h2.f, h2.left.id), hinge: "start" } }), "k")!;
     expect(doorConflicts(k).get("k")).toBe("muur");
     // dezelfde deur naar buiten draaiend: geen botsing

@@ -260,10 +260,10 @@ describe("document", () => {
   });
   it("zet een v1-document om naar v2", () => {
     const d = migrateDoc({ schemaVersion: 1, name: "Oud", settings: { snapToGrid: false, gridSize: 50 } });
-    expect(d.schemaVersion).toBe(3);
+    expect(d.schemaVersion).toBe(4);
     expect(d.start).toEqual({ kind: "house" });
     expect(d.settings.snapToGrid).toBe(false);
-    expect(d.settings.wallDefaults).toEqual({ exterior: 350, interior: 100 });
+    expect(d.settings.wallDefaults).toEqual({ exterior: 380, interior: 90, exteriorType: "spouw-38", interiorType: "binnen-9" });
     expect(d.settings.northAngle).toBe(0);
     expect(migrateDoc({ settings: { northAngle: -90 } }).settings.northAngle).toBe(270);
   });
@@ -279,8 +279,9 @@ describe("document", () => {
   it("nieuw project voor één kamer heeft meteen de juiste binnenmaat", () => {
     const d = createDoc("Living", { kind: "room", width: 6000, depth: 4500, roomFunction: "living" });
     const xs = d.floors[0].nodes.map((n) => n.x);
-    expect(Math.min(...xs)).toBe(-175);
-    expect(Math.max(...xs)).toBe(6175);
+    // spouwmuur van 38 cm: hartlijn 19 cm buiten de binnenmaat
+    expect(Math.min(...xs)).toBe(-190);
+    expect(Math.max(...xs)).toBe(6190);
   });
 });
 
@@ -398,5 +399,34 @@ describe("automatisch bewaren", () => {
     expect(saved).toEqual([1, 2]);
     expect(a.hasUnsaved).toBe(false);
     vi.useRealTimers();
+  });
+});
+
+describe("muurtypes", () => {
+  it("een oud plan krijgt de opbouw die bij de dikte past", () => {
+    const d = migrateDoc({
+      schemaVersion: 3,
+      name: "Oud",
+      floors: [
+        {
+          id: "f",
+          name: "G",
+          elevation: 0,
+          height: 2600,
+          nodes: [
+            { id: "a", x: 0, y: 0 },
+            { id: "b", x: 4000, y: 0 },
+          ],
+          walls: [
+            { id: "w1", start: "a", end: "b", thickness: 350, height: 2600, kind: "exterior", loadBearing: true },
+            { id: "w2", start: "a", end: "b", thickness: 100, height: 2600, kind: "interior", loadBearing: false },
+          ],
+          openings: [],
+          rooms: [],
+          items: [],
+        },
+      ],
+    });
+    expect(d.floors[0].walls.map((w) => w.type)).toEqual(["spouw-35", "binnen-10"]);
   });
 });

@@ -26,7 +26,7 @@ import type { EditorBackend } from "./backend";
 import { Compass } from "./NorthArrow";
 import { PropertiesPanel } from "./Panels";
 import { PlanCanvas } from "./PlanCanvas";
-import { Annotations, Chip, FloorLayer, GhostFloor, Guides, OpeningLabels, OpeningsLayer, SnapMarker, type Selection } from "./PlanLayers";
+import { Annotations, Chip, FloorLayer, GhostFloor, Guides, OpeningLabels, OpeningsLayer, PlanPatterns, SnapMarker, type FacadeOpening, type Selection } from "./PlanLayers";
 import { doorConflicts, needsLintel, openingMarks, openingShape, roomDaylight, type OpeningShape } from "@/lib/geometry/openings";
 import { ToolRail } from "./ToolRail";
 import { chainPolygons, usePlanTools } from "./usePlanTools";
@@ -153,6 +153,17 @@ export function Editor({ initialDoc, backend, email }: EditorProps) {
   );
   const ghostOpening = tools.preview.opening ? openingShape(floor, tools.preview.opening) : null;
   const conflicts = useMemo(() => doorConflicts(shownFloor, analysis), [shownFloor, analysis]);
+  // openingen in de gevels, voor de maatketting buiten
+  const facadeOpenings = useMemo<FacadeOpening[]>(
+    () =>
+      openingShapes.flatMap((sh) => {
+        const sign = analysis.wallOutside.get(sh.opening.wall);
+        if (!sign) return [];
+        const edges: [Vec, Vec] = sh.rebates.length === 2 ? [sh.rebates[0][1], sh.rebates[1][0]] : [sh.cut[0], sh.cut[1]];
+        return [{ edges, outward: { x: -sh.d.y * sign, y: sh.d.x * sign } }];
+      }),
+    [openingShapes, analysis],
+  );
   // daglicht: pas melden zodra er ramen getekend worden, anders is elke nieuwe kamer "te donker"
   const daylightNotes = useMemo(() => {
     const notes = new Map<string, string>();
@@ -368,6 +379,7 @@ export function Editor({ initialDoc, backend, email }: EditorProps) {
                   view={v}
                   showDims={!tools.draft && !moving && marks.length === 0}
                   notes={daylightNotes}
+                  openings={facadeOpenings}
                   onEditEdge={(room, a, b, at) =>
                     setDimEdit({ room, a, b, at, value: formatMeters(Math.hypot(b.x - a.x, b.y - a.y)).replace(" m", "") })
                   }
@@ -413,6 +425,7 @@ export function Editor({ initialDoc, backend, email }: EditorProps) {
               </>
             )}
           >
+            {view && <PlanPatterns zoom={view.zoom} />}
             {below && <GhostFloor analysis={below} />}
             <FloorLayer analysis={analysis} selection={selection} hover={tools.hover} />
             <OpeningsLayer shapes={openingShapes} selection={selection} hover={tools.hover} ghost={ghostOpening} conflicts={conflicts} />

@@ -13,8 +13,9 @@
  *  1 – verdiepingen, muren, openingen, ruimtes, meubels
  *  2 – startkeuze, standaardmuren, maatafspraak, noordrichting
  *  3 – muren en ruimtes worden getekend; "één kamer" krijgt meteen haar muren
+ *  4 – muurtypes met opbouw in lagen (spouwmuur, binnenmuur…)
  */
-export const SCHEMA_VERSION = 3;
+export const SCHEMA_VERSION = 4;
 
 export type Id = string;
 
@@ -40,10 +41,13 @@ export type StartChoice =
 export type MeasureMode = "inside";
 
 export interface WallDefaults {
-  /** Buitenmuur (spouwmuur met isolatie), in mm. */
+  /** Buitenmuur (spouwmuur met isolatie), in mm; volgt uit het type. */
   exterior: number;
-  /** Binnenmuur, in mm. */
+  /** Binnenmuur, in mm; volgt uit het type. */
   interior: number;
+  /** Muurtype voor nieuwe gevels en binnenmuren (zie wallTypes.ts). */
+  exteriorType: string;
+  interiorType: string;
 }
 
 export interface ProjectSettings {
@@ -91,6 +95,8 @@ export interface Wall {
    * Zo kan een muur aan één kant dunner worden zonder dat de lijn verspringt.
    */
   offset?: number;
+  /** Muurtype (opbouw in lagen); afwezig = één laag metselwerk. */
+  type?: string;
   height: number;
   kind: WallKind;
   loadBearing: boolean;

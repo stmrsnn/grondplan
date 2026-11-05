@@ -11,6 +11,7 @@
  *  - rebuildFloor: alles samen na elke wijziging, ruimtes behouden hun naam.
  */
 import type { Floor, Id, Node, Room, Wall } from "../model/types";
+import { wallLayers, type Material } from "../model/wallTypes";
 import { clipToRect, signedArea } from "./polygon";
 import { add, cross, dot, length, scale, sub, type Vec } from "./vec";
 
@@ -327,7 +328,7 @@ export function innerPolygon(face: Face): { points: Vec[]; walls: Id[] } {
  * Omtrek van elke muur als veelhoek, met verstek waar muren samenkomen.
  * Bij heel scherpe hoeken valt hij terug op een rechte afsluiting.
  */
-export function wallPolygons(g: Graph): Map<Id, Vec[]> {
+export function wallPolygons(g: Graph, cornerPairs?: Map<Id, [Id, Id]>): Map<Id, Vec[]> {
   const byId = new Map(g.nodes.map((n) => [n.id, n]));
   // hL/hR: hoe ver de muur links/rechts reikt, uitgaand vanaf het knooppunt bekeken
   type End = { wall: Wall; d: Vec; hL: number; hR: number; angle: number };
@@ -353,26 +354,59 @@ export function wallPolygons(g: Graph): Map<Id, Vec[]> {
       const l = leftNormal(e.d);
       let L = add(p, scale(l, e.hL));
       let R = add(p, scale(l, -e.hR));
-      if (k === 2) {
-        // gewone hoek: verstek (rechtdoor met een andere dikte: rechte afsluiting)
-        const other = list[(i + 1) % k];
+      // twee muren die samen een hoek vormen: verstek (rechtdoor met een andere dikte: rechte afsluiting)
+      const miter = (other: End) => {
         const ol = leftNormal(other.d);
         const hitL = lineIntersection(L, e.d, add(p, scale(ol, -other.hR)), other.d);
         const hitR = lineIntersection(R, e.d, add(p, scale(ol, other.hL)), other.d);
         const lim = 4 * Math.max(e.hL, e.hR, other.hL, other.hR);
         if (hitL && length(sub(hitL, p)) <= lim) L = hitL;
         if (hitR && length(sub(hitR, p)) <= lim) R = hitR;
+      };
+      const parallel = (o: End) => Math.abs(cross(o.d, e.d)) < 1e-6;
+      if (k === 2) {
+        miter(list[(i + 1) % k]);
       } else if (k > 2) {
-        // T- of kruisaansluiting: elke muur loopt door tot de verste rand van de muren
-        // die er dwars op staan (en niet verder, anders steekt hij een kamer in);
-        // overlappingen zijn onzichtbaar want alle muren hebben dezelfde kleur
-        const v = scale(e.d, -1);
-        const reaches = list
-          .filter((o) => o !== e && Math.abs(cross(o.d, e.d)) > 1e-6)
-          .map((o) => (dot(leftNormal(o.d), v) > 0 ? o.hL : o.hR));
-        const ext = reaches.length ? Math.max(...reaches) : 0;
-        L = add(L, scale(e.d, -ext));
-        R = add(R, scale(e.d, -ext));
+        // Aansluiting van drie of meer muren, zoals een architect ze tekent:
+        // twee muren lopen door (de gevelhoek, of de rechtdoorgaande muur) en de
+        // andere stoppen tegen hun vlak. Zo loopt een binnenmuur niet door de
+        // isolatie van de gevel heen.
+        const pairIds = cornerPairs?.get(nodeId);
+        let pair = pairIds ? list.filter((o) => o.wall.id === pairIds[0] || o.wall.id === pairIds[1]) : [];
+        if (pair.length !== 2) {
+          pair = [];
+          let best = -1;
+          for (const x of list)
+            for (const y of list) {
+              if (x === y || dot(x.d, y.d) > -0.999) continue;
+              const t = x.wall.thickness + y.wall.thickness;
+              if (t > best) {
+                best = t;
+                pair = [x, y];
+              }
+            }
+        }
+        if (pair.length === 2) {
+          if (pair.includes(e)) {
+            const other = pair[0] === e ? pair[1] : pair[0];
+            if (!parallel(other)) miter(other);
+          } else {
+            // stoppen tegen het vlak van de doorlopende muren
+            const reach = pair
+              .filter((o) => !parallel(o))
+              .map((o) => (dot(leftNormal(o.d), e.d) > 0 ? o.hL : o.hR));
+            const stop = reach.length ? Math.max(...reach) : 0;
+            L = add(L, scale(e.d, stop));
+            R = add(R, scale(e.d, stop));
+          }
+        } else {
+          // geen duidelijke doorlopende muur (Y-vorm): tot de verste rand van de andere
+          const v = scale(e.d, -1);
+          const reaches = list.filter((o) => o !== e && !parallel(o)).map((o) => (dot(leftNormal(o.d), v) > 0 ? o.hL : o.hR));
+          const ext = reaches.length ? Math.max(...reaches) : 0;
+          L = add(L, scale(e.d, -ext));
+          R = add(R, scale(e.d, -ext));
+        }
       }
       corners.set(`${nodeId}|${e.wall.id}`, { L, R });
     }
@@ -609,6 +643,20 @@ export interface FloorAnalysis {
   /** Losse muren die geen ruimte of gevel vormen (bv. een halfhoge muur). */
   looseWalls: Id[];
   totalArea: number;
+  /** Per gevelmuur: aan welke kant buiten ligt (+1 links, −1 rechts, van start naar einde). */
+  wallOutside: Map<Id, 1 | -1>;
+  /** De lagen van elke muur als stroken, om te arceren. */
+  layers: LayerShape[];
+  /** Grenslijnen tussen lagen. */
+  layerLines: [Vec, Vec][];
+  /** Isolatiesymbool (zigzag of golf) per isolatielaag. */
+  insulation: { pts: Vec[]; soft: boolean }[];
+}
+
+export interface LayerShape {
+  wall: Id;
+  material: Material;
+  poly: Vec[];
 }
 
 /** Punten midden op een rechte zijde weglaten (die zijn geen echte hoek). */
@@ -691,7 +739,19 @@ function computeAnalysis(floor: Floor): FloorAnalysis {
       floor.rooms[i] ?? { id: `tmp-${i}`, walls, name: "Ruimte", function: "andere", floorFinish: "" };
     return { room, inner: points, edgeWalls: walls, area: Math.abs(signedArea(points)), center: labelPoint(points) };
   });
-  const wallPolys = wallPolygons(g);
+  // gevelhoeken: twee muren die op de buitenomtrek op elkaar aansluiten
+  const cornerPairs = new Map<Id, [Id, Id]>();
+  const wallOutside = new Map<Id, 1 | -1>();
+  for (const f of outer) {
+    f.edges.forEach((e, i) => {
+      const next = f.edges[(i + 1) % f.edges.length];
+      if (next.wall.id !== e.wall.id && !cornerPairs.has(e.to.id)) cornerPairs.set(e.to.id, [e.wall.id, next.wall.id]);
+      // het buitenvlak loopt tegen de wijzers in rond het gebouw: buiten ligt links van elke halve rand
+      wallOutside.set(e.wall.id, e.from.id === e.wall.start ? 1 : -1);
+    });
+  }
+  const wallPolys = wallPolygons(g, cornerPairs);
+  const { layers, layerLines, insulation } = wallLayerShapes(floor, wallPolys, wallOutside);
   let outerBounds: FloorAnalysis["outerBounds"] = null;
   for (const poly of wallPolys.values()) {
     for (const p of poly) {
@@ -715,7 +775,110 @@ function computeAnalysis(floor: Floor): FloorAnalysis {
       return floor.walls.filter((w) => !used.has(w.id)).map((w) => w.id);
     })(),
     totalArea: rooms.reduce((s, r) => s + r.area, 0),
+    wallOutside,
+    layers,
+    layerLines,
+    insulation,
   };
+}
+
+/** Houdt het deel van een veelhoek waar dot(p, n) ≥ c. */
+function clipHalf(poly: Vec[], n: Vec, c: number): Vec[] {
+  const out: Vec[] = [];
+  for (let i = 0; i < poly.length; i++) {
+    const a = poly[i];
+    const b = poly[(i + 1) % poly.length];
+    const da = dot(a, n) - c;
+    const db = dot(b, n) - c;
+    if (da >= 0) out.push(a);
+    if ((da >= 0) !== (db >= 0)) out.push(add(a, scale(sub(b, a), da / (da - db))));
+  }
+  return out;
+}
+
+/** Stuk van de lijn p + t·d dat binnen een (bolle) veelhoek valt, als [t0, t1]. */
+function lineInPolygon(poly: Vec[], p: Vec, d: Vec): [number, number] | null {
+  let t0 = -Infinity;
+  let t1 = Infinity;
+  const sgn = signedArea(poly) >= 0 ? 1 : -1;
+  for (let i = 0; i < poly.length; i++) {
+    const a = poly[i];
+    const b = poly[(i + 1) % poly.length];
+    const e = sub(b, a);
+    if (length(e) < 1e-9) continue;
+    // binnen = links van de rand (bij positieve oriëntatie)
+    const nIn = scale(leftNormal(e), sgn);
+    const num = dot(sub(p, a), nIn);
+    const den = dot(d, nIn);
+    if (Math.abs(den) < 1e-12) {
+      if (num < 0) return null;
+      continue;
+    }
+    const t = -num / den;
+    if (den > 0) t0 = Math.max(t0, t);
+    else t1 = Math.min(t1, t);
+  }
+  return t1 - t0 > 1 ? [t0, t1] : null;
+}
+
+/**
+ * Elke muur opgedeeld in zijn lagen (gevelsteen, spouw, isolatie,
+ * binnenblad…). Gevels hebben hun eerste laag aan de buitenkant. De stroken
+ * volgen de verstekhoeken, zodat bv. de isolatie rond een hoek doorloopt.
+ */
+function wallLayerShapes(
+  floor: Floor,
+  wallPolys: Map<Id, Vec[]>,
+  outside: Map<Id, 1 | -1>,
+): Pick<FloorAnalysis, "layers" | "layerLines" | "insulation"> {
+  const byId = new Map(floor.nodes.map((n) => [n.id, n]));
+  const layers: LayerShape[] = [];
+  const layerLines: [Vec, Vec][] = [];
+  const insulation: { pts: Vec[]; soft: boolean }[] = [];
+  for (const w of floor.walls) {
+    const quad = wallPolys.get(w.id);
+    const a = byId.get(w.start);
+    const b = byId.get(w.end);
+    if (!quad || !a || !b) continue;
+    const d = unit(sub(b, a));
+    const n = leftNormal(d);
+    const sides = wallSides(w);
+    // laag 0 aan de buitenkant; binnenmuren van links naar rechts
+    const dir = outside.get(w.id) === -1 ? 1 : -1;
+    let sigma = dir === -1 ? sides.left : -sides.right;
+    const stack = wallLayers(w);
+    stack.forEach((layer, i) => {
+      const next = sigma + dir * layer.thickness;
+      const lo = Math.min(sigma, next);
+      const hi = Math.max(sigma, next);
+      // σ = dot(p − a, n) tussen lo en hi
+      let poly = clipHalf(quad, n, lo + dot(a, n));
+      poly = clipHalf(poly, scale(n, -1), -(hi + dot(a, n)));
+      if (poly.length >= 3) layers.push({ wall: w.id, material: layer.material, poly });
+      if (i < stack.length - 1) {
+        const base = add(a, scale(n, next));
+        const span = lineInPolygon(quad, base, d);
+        if (span) layerLines.push([add(base, scale(d, span[0])), add(base, scale(d, span[1]))]);
+      }
+      if ((layer.material === "isolatie" || layer.material === "wol") && layer.thickness >= 40) {
+        const mid = add(a, scale(n, (lo + hi) / 2));
+        const span = lineInPolygon(quad, mid, d);
+        if (span) {
+          const width = hi - lo;
+          const amp = (width / 2) * 0.82;
+          const step = Math.max(width * 0.55, 30);
+          const pts: Vec[] = [];
+          let k = 0;
+          for (let t = span[0] + step / 2; t <= span[1] - step / 2 + 1e-6; t += step, k++) {
+            pts.push(add(add(mid, scale(d, t)), scale(n, k % 2 === 0 ? amp : -amp)));
+          }
+          if (pts.length >= 2) insulation.push({ pts, soft: layer.material === "wol" });
+        }
+      }
+      sigma = next;
+    });
+  }
+  return { layers, layerLines, insulation };
 }
 
 /* ------------------------------------------------------------------ */
@@ -724,6 +887,8 @@ function computeAnalysis(floor: Floor): FloorAnalysis {
 
 export interface WallProps {
   thickness: number;
+  /** Muurtype (opbouw in lagen). */
+  type?: string;
   height: number;
   kind: Wall["kind"];
   loadBearing: boolean;
@@ -979,9 +1144,11 @@ export function placeRoom(
   a: Vec,
   b: Vec,
   props: WallProps,
-  interiorThickness: number,
+  interior: number | { thickness: number; type?: string },
   newId: IdGen = defaultId,
 ): { floor: Floor; roomId: Id | null } {
+  const interiorThickness = typeof interior === "number" ? interior : interior.thickness;
+  const interiorType = typeof interior === "number" ? undefined : interior.type;
   let x0 = Math.min(a.x, b.x);
   let x1 = Math.max(a.x, b.x);
   let y0 = Math.min(a.y, b.y);
@@ -990,7 +1157,7 @@ export function placeRoom(
   const h = props.thickness / 2;
 
   /** Een gedeelde zijde: welke lijn, naar welke kant de bestaande kamer ligt, en de doelmaten. */
-  type Side = { vertical: boolean; at: number; out: Vec; keep: number; final: number; face: number };
+  type Side = { vertical: boolean; at: number; out: Vec; keep: number; final: number; finalType?: string; face: number };
   const sideOn = (vertical: boolean, at: number, from: number, to: number, out: Vec): Side | null => {
     for (const w of floor.walls) {
       const p = byId.get(w.start);
@@ -1005,8 +1172,10 @@ export function placeRoom(
       if (Math.min(hi, to) - Math.max(lo, from) <= EPS) continue;
       // de bestaande kant houdt zijn reikwijdte; een buitenmuur wordt binnenmuur
       const keep = extentToward(w, p, q, out);
-      const final = w.kind === "exterior" ? interiorThickness : w.thickness;
-      return { vertical, at, out, keep, final, face: final - keep };
+      const toInterior = w.kind === "exterior";
+      const final = toInterior ? interiorThickness : w.thickness;
+      const finalType = toInterior ? interiorType : w.type;
+      return { vertical, at, out, keep, final, finalType, face: final - keep };
     }
     return null;
   };
@@ -1041,7 +1210,10 @@ export function placeRoom(
       if (!on) continue;
       if (otherWalls.has(w.id)) {
         // gedeeld stuk: binnenmuur, de bestaande kamer houdt haar binnenvlak
-        return withExtentToward(w, p, q, sd.out, sd.keep, sd.final);
+        const shared = withExtentToward(w, p, q, sd.out, sd.keep, sd.final);
+        const { type: _t, ...rest } = shared;
+        void _t;
+        return sd.finalType ? { ...rest, type: sd.finalType } : rest;
       }
       // stuk van dezelfde zijde dat niet gedeeld is: binnenvlak in lijn houden
       return withExtentToward(w, p, q, sd.out, w.thickness - sd.face);

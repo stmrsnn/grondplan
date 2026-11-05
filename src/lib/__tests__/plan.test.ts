@@ -415,3 +415,45 @@ describe("op schaal", () => {
     }
   });
 });
+
+describe("muren in lagen, zoals op een bouwplan", () => {
+  const SP = { thickness: 380, height: 2600, kind: "exterior" as const, loadBearing: true, type: "spouw-38" };
+  let k = 0;
+  const gid = () => `L${k++}`;
+  const blank = (): Floor =>
+    ({ id: "f", name: "G", elevation: 0, height: 2600, nodes: [], walls: [], rooms: [], openings: [], items: [] }) as unknown as Floor;
+  const area = (poly: { x: number; y: number }[]) =>
+    Math.abs(poly.reduce((s, p, i) => s + p.x * poly[(i + 1) % poly.length].y - poly[(i + 1) % poly.length].x * p.y, 0) / 2);
+
+  it("een spouwmuur bestaat uit gevelsteen, spouw, isolatie en binnenblad, met de isolatie aan de goede kant", () => {
+    const f = placeRoom(blank(), { x: -190, y: -190 }, { x: 5190, y: 4190 }, SP, { thickness: 90, type: "binnen-9" }, gid).floor;
+    const a = analyzeFloor(f);
+    expect(a.layers.filter((l) => l.material === "isolatie")).toHaveLength(4);
+    // de isolatie ligt tussen 12 cm en 24 cm van het buitenvlak: bij de bovenste gevel dus y van −260 tot −140
+    const top = f.walls.find((w) => {
+      const p = f.nodes.find((n) => n.id === w.start)!;
+      const q = f.nodes.find((n) => n.id === w.end)!;
+      return p.y === -190 && q.y === -190;
+    })!;
+    const iso = a.layers.find((l) => l.wall === top.id && l.material === "isolatie")!;
+    const ys = iso.poly.map((p) => Math.round(p.y));
+    expect(Math.min(...ys)).toBe(-260);
+    expect(Math.max(...ys)).toBe(-140);
+    // de lagen vullen samen precies de muur
+    const total = a.layers.filter((l) => l.wall === top.id).reduce((s, l) => s + area(l.poly), 0);
+    expect(Math.round(total)).toBe(Math.round(area(a.wallPolys.get(top.id)!)));
+    expect(a.insulation.length).toBeGreaterThanOrEqual(4);
+  });
+
+  it("een binnenmuur stopt tegen het binnenblad en loopt niet door de isolatie", () => {
+    let f = placeRoom(blank(), { x: -190, y: -190 }, { x: 6190, y: 4190 }, SP, { thickness: 90, type: "binnen-9" }, gid).floor;
+    f = addPolyline(f, [{ x: 3000, y: -190 }, { x: 3000, y: 4190 }], { thickness: 90, height: 2600, kind: "interior", loadBearing: false, type: "binnen-9" }, gid);
+    f = rebuildFloor(f, gid, f);
+    const a = analyzeFloor(f);
+    const inner = f.walls.find((w) => w.thickness === 90)!;
+    const ys = a.wallPolys.get(inner.id)!.map((p) => Math.round(p.y));
+    // binnenvlak van de gevels: y = 0 en y = 4000
+    expect(Math.min(...ys)).toBe(0);
+    expect(Math.max(...ys)).toBe(4000);
+  });
+});

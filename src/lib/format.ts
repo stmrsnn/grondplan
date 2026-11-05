@@ -79,3 +79,18 @@ export function formatWhen(iso: string, now: Date = new Date()): string {
   if (diffDays === 1) return `gisteren om ${timeFmt.format(d)}`;
   return dateFmt.format(d);
 }
+
+const f3 = new Intl.NumberFormat("nl-BE", { minimumFractionDigits: 2, maximumFractionDigits: 3 });
+
+/**
+ * Maat op het plan, zoals een architect ze schrijft: meter zonder eenheid,
+ * "6,00" of "0,38"; een halve centimeter blijft zichtbaar ("0,095").
+ */
+export function formatDim(mm: number): string {
+  return f3.format(Math.round(mm) / 1000);
+}
+
+/** Oppervlakte op het plan: "27,00 m²". */
+export function formatPlanArea(mm2: number): string {
+  return `${f2.format(mm2 / 1_000_000)} m²`;
+}

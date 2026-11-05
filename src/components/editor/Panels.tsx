@@ -20,6 +20,8 @@ import type { Selection } from "./PlanLayers";
 import { Overview, SelectionPanel } from "./SelectionPanels";
 import { W } from "@/lib/words";
 import { LengthField } from "./LengthField";
+import { WallTypeSelect } from "./WallTypeSelect";
+import { typeThickness, wallType } from "@/lib/model/wallTypes";
 import { Compass } from "./NorthArrow";
 
 function PanelHeader({ title, onHide }: { title: string; onHide: () => void }) {
@@ -242,33 +244,26 @@ export const PropertiesPanel = memo(function PropertiesPanel({
               </svg>
             </TermHelp>
           </div>
-          <LengthField
-            label="Dikte buitenmuur"
-            value={s.wallDefaults.exterior}
-            min={150}
-            max={700}
-            hint={
-              <span className="inline-flex items-center gap-1">
-                Meestal 30 à 40 cm
-                <TermHelp term="Buitenmuur">
-                  <p>
-                    Een Belgische buitenmuur is meestal een spouwmuur: een binnenblad, isolatie en
-                    een gevelsteen. Samen is dat zo&apos;n 30 à 40 cm dik.
-                  </p>
-                  <p>Nieuwe muren krijgen deze dikte vanzelf; je kan ze per muur nog aanpassen.</p>
-                </TermHelp>
-              </span>
-            }
-            onCommit={(mm) => commit(setWallDefaults(s, { ...s.wallDefaults, exterior: mm }))}
+          <WallTypeSelect
+            label="Nieuwe gevels"
+            value={s.wallDefaults.exteriorType}
+            onChange={(id) => {
+              const t = wallType(id)!;
+              commit(setWallDefaults(s, { ...s.wallDefaults, exteriorType: id, exterior: typeThickness(t) }));
+            }}
           />
-          <LengthField
-            label="Dikte binnenmuur"
-            value={s.wallDefaults.interior}
-            min={50}
-            max={400}
-            hint="Meestal 9 à 14 cm"
-            onCommit={(mm) => commit(setWallDefaults(s, { ...s.wallDefaults, interior: mm }))}
+          <WallTypeSelect
+            label="Nieuwe binnenmuren"
+            value={s.wallDefaults.interiorType}
+            onChange={(id) => {
+              const t = wallType(id)!;
+              commit(setWallDefaults(s, { ...s.wallDefaults, interiorType: id, interior: typeThickness(t) }));
+            }}
           />
+          <p className="text-[12px] leading-relaxed text-ink-3">
+            Alle maten op het plan zijn ruwbouwmaten, zoals op een bouwplan: zonder pleisterwerk (± 1,5 cm per
+            wand). Bestaande muren wijzig je per muur.
+          </p>
         </Section>
 
         <Section title="Waar ligt het noorden?">

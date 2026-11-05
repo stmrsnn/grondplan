@@ -48,12 +48,17 @@ test("kamer opdelen met een muur, maat typen en ongedaan maken", async ({ page }
   await page.keyboard.press("Enter");
   await page.keyboard.press("Escape");
 
-  await expect.poll(async () => (await chips(page)).filter((c) => c.t === "5,00 m").length).toBe(2);
-  const top = (await chips(page)).filter((c) => c.t === "5,00 m").sort((a, b) => a.y - b.y);
+  await expect.poll(async () => (await chips(page)).filter((c) => c.t === "5,00").length).toBe(2);
+  const top = (await chips(page)).filter((c) => c.t === "5,00").sort((a, b) => a.y - b.y);
+  // een binnenmuur van hartlijn tot hartlijn van de gevels
+  const o = await page.evaluate(() => {
+    const r = document.querySelector("svg[role=application] [data-walls]")!.getBoundingClientRect();
+    return { y0: r.y, y1: r.y + r.height, k: r.width / 5760 };
+  });
   await page.keyboard.press("m");
-  await page.mouse.click(top[0].x, top[0].y - 30);
-  await page.mouse.move(top[0].x, top[1].y + 15);
-  await page.mouse.click(top[0].x, top[1].y + 30);
+  await page.mouse.click(top[0].x, o.y0 + 190 * o.k);
+  await page.mouse.move(top[0].x, o.y1 - 300 * o.k);
+  await page.mouse.click(top[0].x, o.y1 - 190 * o.k);
   expect(await overview(page)).toHaveLength(3);
 
   const first = (await chips(page)).sort((a, b) => Math.round(a.y) - Math.round(b.y) || a.x - b.x)[0];
@@ -84,7 +89,7 @@ test("standaardkamer stempelen tegen een andere: gedeelde muur wordt binnenmuur"
   await page.keyboard.press("k");
   await page.getByRole("button", { name: /Badkamer 2,5×2/ }).click();
   const outer = await page.evaluate(() => {
-    const p = [...document.querySelectorAll('svg[role=application] g[transform^="translate"] path')].find((x) => x.getAttribute("fill") === "var(--wall-fill)")!;
+    const p = document.querySelector("svg[role=application] [data-walls]")!;
     const r = p.getBoundingClientRect();
     return { x1: r.x + r.width, y0: r.y };
   });
@@ -106,7 +111,7 @@ test("living met een minder diepe keuken ernaast: beide exact", async ({ page })
   await page.keyboard.press("Enter");
   await page.getByRole("group", { name: "Wat voor ruimte is dit?" }).getByRole("button", { name: "Living" }).click();
   const outer = await page.evaluate(() => {
-    const p = [...document.querySelectorAll('svg[role=application] g[transform^="translate"] path')].find((x) => x.getAttribute("fill") === "var(--wall-fill)")!;
+    const p = document.querySelector("svg[role=application] [data-walls]")!;
     const r = p.getBoundingClientRect();
     return { x1: r.x + r.width, y0: r.y };
   });
@@ -129,16 +134,16 @@ test("muren zijn op schaal getekend", async ({ page }) => {
   // de zoom staat in de werkbalk; 100 % = 1 px per cm
   const pct = Number((await page.getByTitle("Alles in beeld (0)").first().innerText()).replace("%", ""));
   const wallBox = await page.evaluate(() => {
-    const p = [...document.querySelectorAll('svg[role=application] g[transform^="translate"] path')].find((x) => x.getAttribute("fill") === "var(--wall-fill)")!;
+    const p = document.querySelector("svg[role=application] [data-walls]")!;
     const r = p.getBoundingClientRect();
     return { w: r.width, h: r.height };
   });
-  // buitenmaat = 5,00 + 2 × 0,35 = 5,70 m en 4,70 m
+  // buitenmaat = 5,00 + 2 × 0,38 = 5,76 m en 4,76 m
   const pxPerMm = (pct / 100) * 0.1;
-  expect(wallBox.w).toBeGreaterThan(5700 * pxPerMm * 0.98);
-  expect(wallBox.w).toBeLessThan(5700 * pxPerMm * 1.02);
-  expect(wallBox.h).toBeGreaterThan(4700 * pxPerMm * 0.98);
-  expect(wallBox.h).toBeLessThan(4700 * pxPerMm * 1.02);
+  expect(wallBox.w).toBeGreaterThan(5760 * pxPerMm * 0.98);
+  expect(wallBox.w).toBeLessThan(5760 * pxPerMm * 1.02);
+  expect(wallBox.h).toBeGreaterThan(4760 * pxPerMm * 0.98);
+  expect(wallBox.h).toBeLessThan(4760 * pxPerMm * 1.02);
 });
 
 test("muurketting met getypte lengtes sluit tot een ruimte", async ({ page }) => {
@@ -156,7 +161,7 @@ test("muurketting met getypte lengtes sluit tot een ruimte", async ({ page }) =>
   await page.keyboard.press("Enter");
   await page.mouse.move(box.x + 550, box.y + 230);
   await page.mouse.click(box.x + 550, box.y + 201);
-  expect(await overview(page)).toEqual(["Ruimte 1 20,6 m²", "Gelijkvloers 20,6 m²"]);
+  expect(await overview(page)).toEqual(["Ruimte 1 20,3 m²", "Gelijkvloers 20,3 m²"]);
 });
 
 test("tekenen met de vinger op een tablet @tablet", async ({ page }) => {
@@ -165,8 +170,8 @@ test("tekenen met de vinger op een tablet @tablet", async ({ page }) => {
   await page.getByRole("button", { name: /Slaapkamer 3,5×3/ }).tap();
   await page.touchscreen.tap(box.x + 600, box.y + 300);
   // op een tablet is het zijpaneel dicht: lees de ruimte uit de tekening
-  await expect(page.locator("svg[role=application] text", { hasText: /^Slaapkamer$/ })).toBeVisible();
-  await expect(page.locator("svg[role=application] text", { hasText: "10,5 m²" })).toBeVisible();
+  await expect(page.locator("svg[role=application] text", { hasText: /^SLAAPKAMER$/ })).toBeVisible();
+  await expect(page.locator("svg[role=application] text", { hasText: "10,50 m²" })).toBeVisible();
 });
 
 test("deur en raam plaatsen, aanpassen, verwijderen en terugzetten", async ({ page }) => {
@@ -178,27 +183,27 @@ test("deur en raam plaatsen, aanpassen, verwijderen en terugzetten", async ({ pa
   await page.keyboard.press("Enter");
   await page.keyboard.press("Escape");
   const o = await page.evaluate(() => {
-    const p = [...document.querySelectorAll('svg[role=application] g[transform^="translate"] path')].find((x) => x.getAttribute("fill") === "var(--wall-fill)")!;
+    const p = document.querySelector("svg[role=application] [data-walls]")!;
     const r = p.getBoundingClientRect();
-    return { x0: r.x, x1: r.x + r.width, y0: r.y, y1: r.y + r.height, k: r.width / 5700 };
+    return { x0: r.x, x1: r.x + r.width, y0: r.y, y1: r.y + r.height, k: r.width / 5760 };
   });
   const arcs = () => page.evaluate(() => [...document.querySelectorAll("svg[role=application] path")].filter((p) => /A/.test(p.getAttribute("d") ?? "")).length);
 
   // deur in de onderste gevel, cursor binnen
   await page.keyboard.press("d");
-  const door = { x: o.x0 + 1500 * o.k, y: o.y1 - 175 * o.k - 8 };
+  const door = { x: o.x0 + 1500 * o.k, y: o.y1 - 190 * o.k - 8 };
   await page.mouse.move(door.x, door.y);
   await page.mouse.click(door.x, door.y);
   expect(await arcs()).toBe(1);
 
   // raam in de bovenste gevel
   await page.keyboard.press("r");
-  await page.mouse.move(o.x0 + 3000 * o.k, o.y0 + 175 * o.k + 8);
-  await page.mouse.click(o.x0 + 3000 * o.k, o.y0 + 175 * o.k + 8);
+  await page.mouse.move(o.x0 + 3000 * o.k, o.y0 + 190 * o.k + 8);
+  await page.mouse.click(o.x0 + 3000 * o.k, o.y0 + 190 * o.k + 8);
 
   // de deur selecteren en breder maken
   await page.keyboard.press("v");
-  await page.mouse.click(door.x, o.y1 - 175 * o.k);
+  await page.mouse.click(door.x, o.y1 - 190 * o.k);
   await expect(page.getByRole("heading", { name: "Deur" })).toBeVisible();
   await page.getByRole("button", { name: "93 cm" }).click();
   await expect(page.getByRole("textbox", { name: /^Breedte/ })).toHaveValue("0,93 m");
@@ -222,13 +227,13 @@ test("een kamer half over een andere kamer wordt geweigerd", async ({ page }) =>
   await page.keyboard.press("Enter");
   await page.keyboard.press("Escape");
   const o = await page.evaluate(() => {
-    const p = [...document.querySelectorAll('svg[role=application] g[transform^="translate"] path')].find((x) => x.getAttribute("fill") === "var(--wall-fill)")!;
+    const p = document.querySelector("svg[role=application] [data-walls]")!;
     const r = p.getBoundingClientRect();
-    return { x1: r.x + r.width, y0: r.y, k: r.width / 5700 };
+    return { x1: r.x + r.width, y0: r.y, k: r.width / 5760 };
   });
   // slaapkamer stempelen: hoek 1,5 m binnen de rechtermuur, ver genoeg van elke lijn voor de magneet
   await page.getByRole("button", { name: /Slaapkamer 3,5×3/ }).click();
-  const at = { x: o.x1 - (175 + 1500) * o.k, y: o.y0 + (175 + 2000) * o.k };
+  const at = { x: o.x1 - (190 + 1500) * o.k, y: o.y0 + (190 + 2000) * o.k };
   await page.mouse.move(at.x, at.y);
   await page.mouse.click(at.x, at.y);
   await expect(page.getByText(/valt half over een andere kamer/)).toBeVisible();

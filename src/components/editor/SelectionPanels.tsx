@@ -20,6 +20,8 @@ import { editFloor, updateRoom, updateWall } from "@/lib/model/commands";
 import type { Floor, ProjectDoc } from "@/lib/model/types";
 import { W } from "@/lib/words";
 import { LengthField } from "./LengthField";
+import { LayerStack, WallTypeSelect } from "./WallTypeSelect";
+import { typeForThickness, typeThickness, wallLayers, wallType } from "@/lib/model/wallTypes";
 import {
   CHOICES,
   choiceOf,
@@ -31,6 +33,7 @@ import {
   LINTEL_LIMIT,
   needsLintel,
   openingName,
+  openingSpan,
   roomDaylight,
   updateOpening,
   wallFrame,
@@ -308,19 +311,22 @@ function WallPanel({
   const len = a && b ? Math.hypot(b.x - a.x, b.y - a.y) : 0;
   const defaults = store.getState().doc.settings.wallDefaults;
   const anchorId = sides.some((sd) => sd.id === anchor) ? anchor : "";
-  const setThickness = (t: number) => {
-    if (t === wall.thickness) return;
-    const after = setWallThickness(floor, [wall.id], t, anchorId || null);
-    commit(
-      editFloor(
-        floor,
-        anchorId ? after : { ...floor, walls: floor.walls.map((w) => (w.id === wall.id ? { ...w, thickness: t } : w)) },
-        "Muurdikte aangepast",
-        "Muur: vorige dikte teruggezet",
-        "Muur: nieuwe dikte opnieuw toegepast",
-      ),
-    );
+  /** Dikte (en opbouw) wijzigen; de gekozen kamer houdt haar binnenmaat. */
+  const setThickness = (t: number, type: string | undefined = typeForThickness(t, wall.kind), what = "Muurdikte") => {
+    if (t === wall.thickness && type === wall.type) return;
+    const thick = t === wall.thickness ? floor : setWallThickness(floor, [wall.id], t, anchorId || null);
+    const after = {
+      ...thick,
+      walls: thick.walls.map((w) => {
+        if (w.id !== wall.id) return w;
+        const { type: _old, ...rest } = w;
+        void _old;
+        return type ? { ...rest, thickness: t, type } : { ...rest, thickness: t };
+      }),
+    };
+    commit(editFloor(floor, after, `${what} aangepast`, `Muur: vorige ${what.toLowerCase()} teruggezet`, `Muur: ${what.toLowerCase()} opnieuw toegepast`));
   };
+  const type = wallType(wall.type);
 
   return (
     <section className="flex flex-col gap-4">
@@ -337,31 +343,23 @@ function WallPanel({
           <Stat label="Lengte" value={formatMeters(len)} />
         )}
       </div>
+      <WallTypeSelect
+        label="Opbouw"
+        value={wall.type}
+        allowCustom
+        onChange={(id) => {
+          const t = wallType(id);
+          if (t) setThickness(typeThickness(t), t.id, "Opbouw");
+        }}
+      />
+      <LayerStack layers={wallLayers(wall)} />
       <LengthField
-        label="Dikte"
+        label="Totale dikte"
         value={wall.thickness}
         min={50}
         max={700}
-        hint={
-          <span className="inline-flex flex-wrap gap-1.5">
-            {(
-              [
-                ["Binnenmuur", defaults.interior],
-                ["Buitenmuur", defaults.exterior],
-              ] as const
-            ).map(([l, t]) => (
-              <button
-                key={l}
-                type="button"
-                className="rounded-full border border-line px-2 py-0.5 hover:border-accent hover:text-accent-ink"
-                onClick={() => setThickness(t)}
-              >
-                {l} {formatMeters(t)}
-              </button>
-            ))}
-          </span>
-        }
-        onCommit={setThickness}
+        hint={type ? "Volgt uit de opbouw; een andere dikte maakt er één laag metselwerk van." : `Standaard: gevel ${formatMeters(defaults.exterior)}, binnenmuur ${formatMeters(defaults.interior)}`}
+        onCommit={(mm) => setThickness(mm)}
       />
       {sides.length > 0 && (
         <label className="flex flex-col gap-1.5">
@@ -449,7 +447,7 @@ function OpeningPanel({
     store.execute(editFloor(floor, after, `${label}: ${what} aangepast`, `${label}: vorige ${what} teruggezet`, `${label}: ${what} opnieuw aangepast`));
     store.seal();
   };
-  const gaps = cornerGaps(frame, o.offset, o.width);
+  const gaps = cornerGaps(frame, o.offset, openingSpan(o));
   // in woorden: welke kant is het begin van de muur, zoals je het plan bekijkt
   const horizontal = Math.abs(frame.d.x) >= Math.abs(frame.d.y);
   const [startWord, endWord] = horizontal

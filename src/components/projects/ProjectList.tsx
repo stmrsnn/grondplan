@@ -328,14 +328,14 @@ function CardPreview({ raw }: { raw: unknown }) {
       {preview ? (
         <svg viewBox={`0 0 ${preview.w} ${preview.h}`} className="h-full w-full">
           {preview.rooms.map(([cat, ...pts], i) => (
-            <path key={`r${i}`} d={previewPath(pts)} fill={`var(--room-${ROOM_CATEGORIES[cat]})`} stroke="var(--wall-line)" strokeWidth={0.6} />
+            <path key={`r${i}`} d={previewPath(pts)} fill="var(--plan-paper)" data-cat={ROOM_CATEGORIES[cat]} />
           ))}
-          {preview.walls.length > 0 && <path d={preview.walls.map(previewPath).join("")} fill="var(--wall-fill)" />}
+          {preview.walls.length > 0 && <path d={preview.walls.map(previewPath).join("")} fill="var(--plan-ink)" />}
           {preview.cuts.map((c, i) => (
-            <path key={`c${i}`} d={previewPath(c)} fill="var(--canvas)" />
+            <path key={`c${i}`} d={previewPath(c)} fill="var(--plan-paper)" />
           ))}
           {preview.lines.map(([x1, y1, x2, y2, t], i) => (
-            <line key={i} x1={x1} y1={y1} x2={x2} y2={y2} stroke="var(--wall-fill)" strokeWidth={t} strokeLinecap="square" />
+            <line key={i} x1={x1} y1={y1} x2={x2} y2={y2} stroke="var(--plan-ink)" strokeWidth={t} strokeLinecap="square" />
           ))}
         </svg>
       ) : (

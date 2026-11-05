@@ -7,6 +7,7 @@
  * de hoeken, de vorm om te tekenen, botsende deuren en daglicht.
  */
 import type { Floor, Id, Opening, OpeningKind, OpeningVariant, Wall } from "../model/types";
+import { wallLayers } from "../model/wallTypes";
 import { analyzeFloor, pointInPolygon, wallSides, type FloorAnalysis } from "./plan";
 import { add, cross, dot, length, scale, sub, type Vec } from "./vec";
 
@@ -113,11 +114,24 @@ export function choiceProps(
   return { kind: info.kind, variant: info.variant, ...info.defaults(wallKind) };
 }
 
+/** Breedte van het deurkader aan elke kant (mm). */
+export const DOOR_FRAME = 50;
+
+/**
+ * Ruwbouwopening langs de muur. Bij deuren is `width` de breedte van het
+ * deurblad (zoals je een deur koopt: 83 cm); de opening in de muur is dan
+ * het blad plus het kader aan beide kanten. Bij ramen, poorten en doorgangen
+ * is `width` meteen de opening.
+ */
+export function openingSpan(o: Pick<Opening, "kind" | "variant" | "width">): number {
+  return o.kind === "door" && o.variant !== "garage" ? o.width + 2 * DOOR_FRAME : o.width;
+}
+
 /** Breder dan dit in een dragende muur: een latei of balk is nodig. */
 export const LINTEL_LIMIT = 1000;
 
 export function needsLintel(o: Opening, wall: Wall): boolean {
-  return wall.loadBearing && o.width > LINTEL_LIMIT;
+  return wall.loadBearing && openingSpan(o) > LINTEL_LIMIT;
 }
 
 /* ------------------------------------------------------------------ */
@@ -221,7 +235,7 @@ export function fitOffset(floor: Floor, frame: WallFrame, width: number, wanted:
   if (hi < lo - 0.5) return null;
   const taken = floor.openings
     .filter((o) => o.wall === frame.wall.id && o.id !== ignore)
-    .map((o) => [o.offset - o.width / 2, o.offset + o.width / 2] as const)
+    .map((o) => [o.offset - openingSpan(o) / 2, o.offset + openingSpan(o) / 2] as const)
     .sort((p, q) => p[0] - q[0]);
   const free: [number, number][] = [];
   let from = lo;
@@ -283,7 +297,7 @@ export function projectOnWall(
 export function addOpening(floor: Floor, o: Omit<Opening, "id">, id: Id): Floor | null {
   const frame = wallFrame(floor, o.wall);
   if (!frame) return null;
-  const offset = fitOffset(floor, frame, o.width, o.offset);
+  const offset = fitOffset(floor, frame, openingSpan(o), o.offset);
   if (offset === null) return null;
   const clean: Opening = { ...o, id, offset };
   if (clean.variant === undefined) delete clean.variant;
@@ -298,7 +312,7 @@ export function updateOpening(floor: Floor, id: Id, patch: Partial<Opening>): Fl
   if (next.variant === undefined) delete next.variant;
   const frame = wallFrame(floor, next.wall);
   if (!frame) return null;
-  const offset = fitOffset(floor, frame, next.width, next.offset, id);
+  const offset = fitOffset(floor, frame, openingSpan(next), next.offset, id);
   if (offset === null) return null;
   return { ...floor, openings: floor.openings.map((o) => (o.id === id ? { ...next, offset } : o)) };
 }
@@ -321,24 +335,32 @@ export interface Leaf {
   sweep: 0 | 1;
 }
 
-/** Alles wat nodig is om een opening te tekenen, in wereldcoördinaten. */
+/**
+ * Alles om een opening te tekenen zoals op een uitvoeringsplan, in
+ * wereldcoördinaten.
+ */
 export interface OpeningShape {
   opening: Opening;
-  /** De vier hoeken van de uitsparing in de muur. */
+  /** Uitsparing in de muur (wordt papier). */
   cut: Vec[];
-  /** Dagkanten: de twee dwarse lijntjes aan de randen. */
-  jambs: [Vec, Vec][];
-  /** Dunne lijnen evenwijdig aan de muur (raam: twee vlakken en het glas). */
-  lines: [Vec, Vec][];
-  /** Dikke lijnen: een schuivend deurblad, een poort. */
-  panels: [Vec, Vec][];
+  /** Stukjes muurvlak die wegvallen (de snijlijn loopt niet door de opening). */
+  erase: [Vec, Vec][];
+  /** Nieuwe snijlijnen: dagkanten, aanslag (dik). */
+  cutLines: [Vec, Vec][];
+  /** Aanslag van het buitenblad: stukjes gevelsteen die voor het kader komen. */
+  rebates: Vec[][];
+  /** Kaders (raam- en deurkader): papier met een lijn. */
+  frames: Vec[][];
+  /** Deurbladen en schuivende delen: rechthoeken. */
+  panels: Vec[][];
+  /** Glas: dunne lijnen. */
+  glass: [Vec, Vec][];
+  /** Zichtlijnen onder de snede: dorpel buiten, vensterbank binnen (dun). */
+  thin: [Vec, Vec][];
   /** Stippellijnen: open stand van een schuifdeur, een poort onder het plafond. */
   dashed: [Vec, Vec][];
-  /** Stukjes muurvlak die weg moeten (de deuropening loopt door). */
-  gaps: [Vec, Vec][];
   /** Draaiende bladen met hun kwartcirkel. */
   leaves: Leaf[];
-  /** Midden van de opening (voor labels en maten). */
   center: Vec;
   /** Richting van de muur, en de normaal naar de draaikant. */
   d: Vec;
@@ -354,80 +376,182 @@ function leaf(hinge: Vec, into: Vec, to: Vec, radius: number): Leaf {
   return { hinge, tip, to, radius, sweep };
 }
 
+/** Maten van kaders en details (mm), zoals gangbaar. */
+const FRAME_DEPTH = 70; // raam- of buitendeurkader
+const STILE = 60; // zichtbare breedte van een raamstijl
+const REBATE = 40; // aanslag van het buitenblad voor het kader
+const SILL_OUT = 40; // dorpel steekt buiten uit
+const BENCH_IN = 25; // vensterbank steekt binnen uit
+const LEAF = 40; // dikte van een deurblad
+
+/**
+ * Doorsnede van een muur dwars op de muur: waar ligt de buitenkant, en hoe
+ * diep zitten de lagen. Bij een binnenmuur is "buiten" gewoon links.
+ */
+function section(floor: Floor, f: WallFrame) {
+  const s = wallSides(f.wall);
+  const outSign = analyzeFloor(floor).wallOutside.get(f.wall.id) ?? 0;
+  const sigmaOut = outSign === -1 ? -s.right : s.left;
+  const inward = outSign === -1 ? 1 : -1;
+  const layers = wallLayers(f.wall);
+  const T = f.wall.thickness;
+  const isoIndex = layers.findIndex((l) => l.material === "isolatie" || l.material === "wol");
+  const depthBefore = (i: number) => layers.slice(0, i).reduce((sum, l) => sum + l.thickness, 0);
+  const cavity = outSign !== 0 && isoIndex > 0 && layers[0].material === "gevelsteen";
+  return {
+    exterior: outSign !== 0,
+    T,
+    cavity,
+    outerLeaf: cavity ? layers[0].thickness : 0,
+    /** Diepte (vanaf buiten) waar het kader begint: tegen de isolatie, of in het midden. */
+    frameAt: isoIndex > 0 && outSign !== 0 ? depthBefore(isoIndex) : Math.max(0, (T - FRAME_DEPTH) / 2),
+    /** Punt op afstand t langs de muur en `depth` vanaf het buitenvlak. */
+    at: (t: number, depth: number) => add(add(f.a, scale(f.d, t)), scale(f.n, sigmaOut + inward * depth)),
+    /** Diepte van het muurvlak aan de linker- of rechterkant. */
+    depthOfSide: (side: "left" | "right") => ((side === "left") === (outSign !== -1) ? 0 : T),
+  };
+}
+
+const rect = (P: (t: number, d: number) => Vec, t0: number, t1: number, d0: number, d1: number): Vec[] => [
+  P(t0, d0),
+  P(t1, d0),
+  P(t1, d1),
+  P(t0, d1),
+];
+
 export function openingShape(floor: Floor, o: Opening): OpeningShape | null {
   const f = wallFrame(floor, o.wall);
   if (!f) return null;
-  const s = wallSides(f.wall);
-  const half = o.width / 2;
-  const p0 = add(f.a, scale(f.d, o.offset - half));
-  const p1 = add(f.a, scale(f.d, o.offset + half));
-  const at = (p: Vec, across: number) => add(p, scale(f.n, across));
-  const L = (p: Vec) => at(p, s.left);
-  const R = (p: Vec) => at(p, -s.right);
-  const midAcross = (s.left - s.right) / 2;
+  const sec = section(floor, f);
+  const P = sec.at;
+  const T = sec.T;
+  const span = openingSpan(o);
+  const t0 = o.offset - span / 2;
+  const t1 = o.offset + span / 2;
   const swing = o.swing ?? { side: "left" as const, hinge: "start" as const };
-  const sideSign = swing.side === "left" ? 1 : -1;
-  const out = scale(f.n, sideSign);
+  const out = swing.side === "left" ? f.n : scale(f.n, -1);
   const center = add(f.a, scale(f.d, o.offset));
+  const swingDepth = sec.depthOfSide(swing.side);
   const shape: OpeningShape = {
     opening: o,
-    cut: [L(p0), L(p1), R(p1), R(p0)],
-    jambs: [
-      [L(p0), R(p0)],
-      [L(p1), R(p1)],
+    cut: rect(P, t0, t1, 0, T),
+    erase: [
+      [P(t0, 0), P(t1, 0)],
+      [P(t0, T), P(t1, T)],
     ],
-    lines: [],
+    cutLines: [],
+    rebates: [],
+    frames: [],
     panels: [],
+    glass: [],
+    thin: [],
     dashed: [],
-    gaps: [],
     leaves: [],
     center,
     d: f.d,
     out,
-    farFace: swing.side === "left" ? R(center) : L(center),
+    farFace: P(o.offset, T - swingDepth),
   };
   const c = choiceOf(o);
+  const framed = o.kind === "window" || (o.kind === "door" && c !== "garage");
+  // aanslag: het buitenblad (gevelsteen) komt een paar cm voor het kader
+  const rebate = sec.cavity && framed ? REBATE : 0;
+  if (rebate) {
+    const g = sec.outerLeaf;
+    shape.rebates.push(rect(P, t0, t0 + rebate, 0, g), rect(P, t1 - rebate, t1, 0, g));
+    shape.cutLines.push(
+      [P(t0, 0), P(t0 + rebate, 0)],
+      [P(t0 + rebate, 0), P(t0 + rebate, g)],
+      [P(t0, g), P(t0 + rebate, g)],
+      [P(t1, 0), P(t1 - rebate, 0)],
+      [P(t1 - rebate, 0), P(t1 - rebate, g)],
+      [P(t1, g), P(t1 - rebate, g)],
+      [P(t0, g), P(t0, T)],
+      [P(t1, g), P(t1, T)],
+    );
+  } else {
+    shape.cutLines.push([P(t0, 0), P(t0, T)], [P(t1, 0), P(t1, T)]);
+  }
+
+  if (o.kind === "passage") return shape;
 
   if (o.kind === "window") {
-    shape.lines.push([L(p0), L(p1)], [R(p0), R(p1)]);
+    const fd = sec.frameAt;
+    // kader: twee stijlen (de onderdorpel ligt onder de snede)
+    shape.frames.push(rect(P, t0, t0 + STILE, fd, fd + FRAME_DEPTH), rect(P, t1 - STILE, t1, fd, fd + FRAME_DEPTH));
+    const g0 = t0 + STILE;
+    const g1 = t1 - STILE;
+    const mid = fd + FRAME_DEPTH / 2;
     if (c === "window") {
-      shape.lines.push([at(p0, midAcross), at(p1, midAcross)]);
+      // dubbele beglazing
+      shape.glass.push([P(g0, mid - 10), P(g1, mid - 10)], [P(g0, mid + 10), P(g1, mid + 10)]);
     } else {
       // schuifraam: twee vleugels die elkaar in het midden overlappen
-      const lap = Math.min(100, o.width / 8);
-      const q = (s.left + s.right) / 8;
-      shape.lines.push(
-        [at(p0, midAcross - q), at(add(center, scale(f.d, lap)), midAcross - q)],
-        [at(add(center, scale(f.d, -lap)), midAcross + q), at(p1, midAcross + q)],
-      );
+      const lap = Math.min(100, span / 8);
+      const m = o.offset;
+      shape.frames.push(rect(P, g0, m + lap, fd + 6, fd + 30), rect(P, m - lap, g1, fd + 40, fd + 64));
+      shape.glass.push([P(g0, fd + 18), P(m + lap, fd + 18)], [P(m - lap, fd + 52), P(g1, fd + 52)]);
+    }
+    if (sec.exterior) {
+      // dorpel buiten (onder de snede: dunne lijn) en vensterbank binnen
+      const a = t0 + rebate;
+      const b = t1 - rebate;
+      shape.thin.push([P(a, -SILL_OUT), P(b, -SILL_OUT)], [P(a, -SILL_OUT), P(a, 0)], [P(b, -SILL_OUT), P(b, 0)]);
+      if (o.sillHeight > 0)
+        shape.thin.push(
+          [P(t0 - 20, T + BENCH_IN), P(t1 + 20, T + BENCH_IN)],
+          [P(t0 - 20, T), P(t0 - 20, T + BENCH_IN)],
+          [P(t1 + 20, T), P(t1 + 20, T + BENCH_IN)],
+        );
     }
     return shape;
   }
 
-  shape.gaps.push([L(p0), L(p1)], [R(p0), R(p1)]);
-  if (o.kind === "passage") return shape;
+  // deuren
+  if (c === "garage") {
+    shape.panels.push(rect(P, t0, t1, T / 2 - 20, T / 2 + 20));
+    const inner = swingDepth === 0 ? -400 : T + 400;
+    shape.dashed.push([P(t0, inner), P(t1, inner)]);
+    return shape;
+  }
+  // kader: buitendeur in het isolatievlak, binnendeur over de hele muurdikte (omkasting)
+  const fd0 = sec.exterior ? sec.frameAt : 0;
+  const fd1 = sec.exterior ? sec.frameAt + FRAME_DEPTH : T;
+  shape.frames.push(rect(P, t0, t0 + DOOR_FRAME, fd0, fd1), rect(P, t1 - DOOR_FRAME, t1, fd0, fd1));
+  const a = t0 + DOOR_FRAME;
+  const b = t1 - DOOR_FRAME;
+  // het blad draait aan de kaderzijde die naar de draaikant kijkt
+  const hingeDepth = swingDepth === 0 ? fd0 : fd1;
+  const into = swingDepth === 0 ? -1 : 1; // diepte-richting naar de draaikant
+  if (sec.exterior) shape.thin.push([P(a, -SILL_OUT), P(b, -SILL_OUT)], [P(a, -SILL_OUT), P(a, 0)], [P(b, -SILL_OUT), P(b, 0)]);
 
-  const face = (p: Vec) => (swing.side === "left" ? L(p) : R(p));
+  if (c === "sliding") {
+    // blad tegen de muur aan de draaikant, dicht voor de opening; open stand in stippellijn
+    const d0 = swingDepth + into * 15;
+    const d1 = swingDepth + into * (15 + LEAF);
+    shape.panels.push(rect(P, a - 20, b + 20, d0, d1));
+    const shift = swing.hinge === "start" ? -(o.width + 40) : o.width + 40;
+    const s0 = a - 20 + shift;
+    const s1 = b + 20 + shift;
+    const q = [P(s0, d0), P(s1, d0), P(s1, d1), P(s0, d1)];
+    shape.dashed.push([q[0], q[1]], [q[1], q[2]], [q[2], q[3]], [q[3], q[0]]);
+    return shape;
+  }
+
+  const leafAt = (hingeT: number, toward: 1 | -1, width: number) => {
+    const H = P(hingeT, hingeDepth);
+    const tipT = hingeT;
+    // open: loodrecht op de muur, met zijn dikte naar de opening toe
+    shape.panels.push([H, P(tipT, hingeDepth + into * width), P(tipT + toward * LEAF, hingeDepth + into * width), P(hingeT + toward * LEAF, hingeDepth)]);
+    shape.leaves.push(leaf(H, scale(sub(P(hingeT, hingeDepth + into), H), 1 / length(sub(P(hingeT, hingeDepth + into), H))), P(hingeT + toward * width, hingeDepth), width));
+  };
   if (c === "double") {
-    const m = face(center);
-    shape.leaves.push(leaf(face(p0), out, m, half), leaf(face(p1), out, m, half));
-  } else if (c === "sliding") {
-    // dicht: blad in het midden van de muur; open: langs de muur, aan de scharnierkant
-    shape.panels.push([at(p0, midAcross), at(p1, midAcross)]);
-    const dir = swing.hinge === "start" ? -1 : 1;
-    const from = swing.hinge === "start" ? p0 : p1;
-    const inset = (s.left + s.right) / 2 + 30;
-    const lineAt = (p: Vec) => at(p, midAcross + sideSign * inset);
-    shape.dashed.push([lineAt(from), lineAt(add(from, scale(f.d, dir * o.width)))]);
-  } else if (c === "garage") {
-    // sectionale poort: dicht in de muur, open als stippellijn onder het plafond
-    const inset = (s.left + s.right) / 2 + 400;
-    shape.panels.push([at(p0, midAcross), at(p1, midAcross)]);
-    shape.dashed.push([at(p0, midAcross + sideSign * inset), at(p1, midAcross + sideSign * inset)]);
+    leafAt(a, 1, o.width / 2);
+    leafAt(b, -1, o.width / 2);
+  } else if (swing.hinge === "start") {
+    leafAt(a, 1, o.width);
   } else {
-    const hinge = face(swing.hinge === "start" ? p0 : p1);
-    const to = face(swing.hinge === "start" ? p1 : p0);
-    shape.leaves.push(leaf(hinge, out, to, o.width));
+    leafAt(b, -1, o.width);
   }
   return shape;
 }
@@ -440,7 +564,7 @@ export function hitOpening(floor: Floor, p: Vec, tol: number): Opening | null {
     const s = wallSides(f.wall);
     const t = dot(sub(p, f.a), f.d);
     const across = dot(sub(p, f.a), f.n);
-    if (Math.abs(t - o.offset) <= o.width / 2 + tol && across <= s.left + tol && across >= -s.right - tol) return o;
+    if (Math.abs(t - o.offset) <= openingSpan(o) / 2 + tol && across <= s.left + tol && across >= -s.right - tol) return o;
   }
   return null;
 }
@@ -460,12 +584,13 @@ export function openingMarks(
   const out = side === "left" ? f.n : scale(f.n, -1);
   const ext = side === "left" ? s.left : s.right;
   const at = (t: number) => add(add(f.a, scale(f.d, t)), scale(out, ext));
-  const e0 = o.offset - o.width / 2;
-  const e1 = o.offset + o.width / 2;
-  const gaps = cornerGaps(f, o.offset, o.width);
+  const span = openingSpan(o);
+  const e0 = o.offset - span / 2;
+  const e1 = o.offset + span / 2;
+  const gaps = cornerGaps(f, o.offset, span);
   const marks: { from: Vec; to: Vec; len: number; out: Vec; kind: "gap" | "width" }[] = [];
   if (gaps.start > 0) marks.push({ from: at(f.startMargin), to: at(e0), len: gaps.start, out, kind: "gap" });
-  marks.push({ from: at(e0), to: at(e1), len: o.width, out, kind: "width" });
+  marks.push({ from: at(e0), to: at(e1), len: span, out, kind: "width" });
   if (gaps.end > 0) marks.push({ from: at(e1), to: at(f.len - f.endMargin), len: gaps.end, out, kind: "gap" });
   return marks;
 }

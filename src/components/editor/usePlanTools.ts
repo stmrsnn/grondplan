@@ -29,6 +29,7 @@ import {
   choiceProps,
   CHOICES,
   openingName,
+  openingSpan,
   roomSide,
   type OpeningChoice,
   projectOnWall,
@@ -154,6 +155,7 @@ export function usePlanTools({ store, doc, floor, view, selection, setSelection,
   const effectiveWall: WallChoice = wallChoice ?? (floor.rooms.length > 0 ? "interior" : "exterior");
   const wallProps = (kind: WallChoice): WallProps => ({
     thickness: kind === "exterior" ? s.wallDefaults.exterior : s.wallDefaults.interior,
+    type: kind === "exterior" ? s.wallDefaults.exteriorType : s.wallDefaults.interiorType,
     height: floor.height,
     kind,
     loadBearing: kind === "exterior",
@@ -277,7 +279,7 @@ export function usePlanTools({ store, doc, floor, view, selection, setSelection,
         return;
       }
       // binnenmaten blijven exact; gedeelde muren worden binnenmuren, de buren blijven even groot
-      const placed = placeRoom(floor, a, b, wallProps("exterior"), s.wallDefaults.interior);
+      const placed = placeRoom(floor, a, b, wallProps("exterior"), { thickness: s.wallDefaults.interior, type: s.wallDefaults.interiorType });
       let after = placed.floor;
       const fresh = placed.roomId ? after.rooms.find((r) => r.id === placed.roomId) : undefined;
       if (fresh && preset) {
@@ -353,9 +355,10 @@ export function usePlanTools({ store, doc, floor, view, selection, setSelection,
       const { frame } = hit;
       const def = choiceProps(choice, frame.wall.kind);
       const width = openingWidth[choice] ?? def.width;
-      const offset = fitOffset(floor, frame, width, snapOffset(frame, width, hit.along, grid ?? 50));
+      const span = openingSpan({ ...def, width });
+      const offset = fitOffset(floor, frame, span, snapOffset(frame, span, hit.along, grid ?? 50));
       if (offset === null) return null;
-      const gaps = cornerGaps(frame, offset, width);
+      const gaps = cornerGaps(frame, offset, span);
       // een buitendeur draait naar binnen, een binnendeur naar de kant van de cursor;
       // scharnieren aan de dichtste hoek, zodat de deur tegen de muur openslaat
       const side = frame.wall.kind === "exterior" ? (roomSide(floor, frame) ?? hit.side) : hit.side;
@@ -526,11 +529,12 @@ export function usePlanTools({ store, doc, floor, view, selection, setSelection,
           const along = hit ? hit.along : dot({ x: e.world.x - frame.a.x, y: e.world.y - frame.a.y }, frame.d);
           const wall = frame.wall.id;
           const base = wall === cur.wall ? d.base : { ...d.base, openings: d.base.openings.filter((x) => x.id !== d.id) };
-          const offset = fitOffset(base, frame, cur.width, snapOffset(frame, cur.width, along, grid ?? 50), d.id);
+          const span = openingSpan(cur);
+          const offset = fitOffset(base, frame, span, snapOffset(frame, span, along, grid ?? 50), d.id);
           if (offset === null) return true;
           const swing = wall === cur.wall || !hit ? cur.swing : { side: hit.side, hinge: cur.swing?.hinge ?? "start" };
           setDraft({ ...d.base, openings: d.base.openings.map((x) => (x.id === d.id ? { ...x, wall, offset, swing } : x)) });
-          const g = cornerGaps(frame, offset, cur.width);
+          const g = cornerGaps(frame, offset, span);
           setPreview({ snap: null, chain: null, rect: null, chip: { at: e.world, text: `${formatMeters(g.start)} · ${formatMeters(g.end)}` } });
           return true;
         }

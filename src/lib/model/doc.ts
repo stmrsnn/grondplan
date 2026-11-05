@@ -1,4 +1,5 @@
 import { addRectangle, functionLabel } from "../geometry/plan";
+import { DEFAULT_EXTERIOR_TYPE, DEFAULT_INTERIOR_TYPE, typeForThickness, typeThickness, wallType } from "./wallTypes";
 import {
   SCHEMA_VERSION,
   type Floor,
@@ -15,12 +16,17 @@ export const DEFAULT_FLOOR_HEIGHT = 2600;
 /** Vloer tot vloer: plafondhoogte + vloerpakket en draagvloer. */
 export const DEFAULT_STOREY = 2900;
 
-/** Gangbare Belgische diktes: spouwmuur met isolatie en een gewone binnenmuur. */
+/** Gangbare Belgische opbouw: spouwmuur van 38 cm en een binnenmuur van 9 cm. */
 export const DEFAULT_SETTINGS: ProjectSettings = {
   snapToGrid: true,
   gridSize: 50,
   measureMode: "inside",
-  wallDefaults: { exterior: 350, interior: 100 },
+  wallDefaults: {
+    exterior: typeThickness(wallType(DEFAULT_EXTERIOR_TYPE)!),
+    interior: typeThickness(wallType(DEFAULT_INTERIOR_TYPE)!),
+    exteriorType: DEFAULT_EXTERIOR_TYPE,
+    interiorType: DEFAULT_INTERIOR_TYPE,
+  },
   northAngle: 0,
 };
 
@@ -62,7 +68,7 @@ export function withStartRoom(doc: ProjectDoc): ProjectDoc {
     floor,
     { x: -t / 2, y: -t / 2 },
     { x: start.width + t / 2, y: start.depth + t / 2 },
-    { thickness: t, height: floor.height, kind: "exterior", loadBearing: true },
+    { thickness: t, height: floor.height, kind: "exterior", loadBearing: true, type: doc.settings.wallDefaults.exteriorType },
   );
   const label = functionLabel(start.roomFunction);
   const rooms = built.rooms.map((r) => ({
@@ -117,13 +123,21 @@ export function migrateDoc(raw: unknown, fallbackName = "Naamloos project"): Pro
       ...DEFAULT_SETTINGS,
       ...s,
       measureMode: "inside",
-      wallDefaults: { ...DEFAULT_SETTINGS.wallDefaults, ...(s.wallDefaults ?? {}) },
+      // vóór v4 had een project enkel diktes: neem de nieuwe standaardopbouw
+      wallDefaults:
+        fromVersion < 4 ? { ...DEFAULT_SETTINGS.wallDefaults } : { ...DEFAULT_SETTINGS.wallDefaults, ...(s.wallDefaults ?? {}) },
       northAngle: isNum(s.northAngle) ? normalizeAngle(s.northAngle) : 0,
     },
-    floors: floors.map((f, i) => ({
-      ...createFloor(`Verdieping ${i}`),
-      ...f,
-    })),
+    floors: floors.map((f, i) => {
+      const floor = { ...createFloor(`Verdieping ${i}`), ...f };
+      // v3 → v4: bestaande muren krijgen de opbouw die bij hun dikte past (35 cm = spouwmuur…)
+      if (fromVersion < 4)
+        floor.walls = floor.walls.map((w) => {
+          const type = w.type ?? typeForThickness(w.thickness, w.kind);
+          return type ? { ...w, type } : w;
+        });
+      return floor;
+    }),
   };
   // v2 → v3: een "één kamer"-project van vóór het tekenen krijgt eenmalig zijn muren
   return fromVersion < 3 ? withStartRoom(migrated) : migrated;
