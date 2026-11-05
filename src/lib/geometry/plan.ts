@@ -11,7 +11,7 @@
  *  - rebuildFloor: alles samen na elke wijziging, ruimtes behouden hun naam.
  */
 import type { Floor, Id, Node, Room, Wall } from "../model/types";
-import { wallLayers, wallTypesVersion, type Material } from "../model/wallTypes";
+import { wallLayers, wallTypesVersion, type Layer, type Material } from "../model/wallTypes";
 import { clipToRect, signedArea } from "./polygon";
 import { add, cross, dot, length, scale, sub, type Vec } from "./vec";
 
@@ -308,11 +308,19 @@ export function wallBodyLine(w: Wall, a: Vec, b: Vec): [Vec, Vec] {
  * binnen, hoeken worden opnieuw gesneden. Geeft per zijde ook de muur terug.
  */
 export function innerPolygon(face: Face): { points: Vec[]; walls: Id[] } {
+  return offsetContour(face, (e) => leftExtent(e.wall, e.from.id));
+}
+
+/**
+ * Zoals de binnenkant, maar elke zijde op een eigen afstand van de hartlijn
+ * (bv. tot achter de pleisterlaag).
+ */
+function offsetContour(face: Face, extent: (e: HalfEdge) => number): { points: Vec[]; walls: Id[] } {
   const n = face.edges.length;
   const lines = face.edges.map((e) => {
     const d = unit(sub(e.to, e.from));
     const nrm = leftNormal(d);
-    return { p: add(e.from, scale(nrm, leftExtent(e.wall, e.from.id))), d, nrm, e };
+    return { p: add(e.from, scale(nrm, extent(e))), d, nrm, e };
   });
   const points: Vec[] = [];
   const walls: Id[] = [];
@@ -326,7 +334,7 @@ export function innerPolygon(face: Face): { points: Vec[]; walls: Id[] } {
       // rechtdoor naar een muur van een andere dikte: het muurvlak maakt een sprong
       const step = dot(sub(cur.p, prev.p), prev.nrm);
       if (Math.abs(step) > 0.5) {
-        points.push(add(cur.e.from, scale(prev.nrm, leftExtent(prev.e.wall, prev.e.from.id))));
+        points.push(add(cur.e.from, scale(prev.nrm, extent(prev.e))));
         walls.push(cur.e.wall.id);
       }
       points.push(cur.p);
@@ -334,6 +342,41 @@ export function innerPolygon(face: Face): { points: Vec[]; walls: Id[] } {
     walls.push(cur.e.wall.id);
   }
   return { points, walls };
+}
+
+/** Afwerking aan de kant van een ruimte: wordt pleister (volgt de ruimte), niet per muur. */
+const FINISH = new Set<Material>(["gips"]);
+/** Metselwerk en beton: muren uit hetzelfde materiaal worden in verband gemetseld. */
+const MASONRY = new Set<Material>(["baksteen", "snelbouw", "gipsblok", "kalkzandsteen", "beton", "cellenbeton"]);
+
+/** De kern van een muur zonder afwerking aan de buitenkanten. */
+function coreLayers(w: Wall): Layer[] {
+  const st = wallLayers(w);
+  let i = 0;
+  let j = st.length;
+  while (i < j - 1 && FINISH.has(st[i].material)) i++;
+  while (j - 1 > i && FINISH.has(st[j - 1].material)) j--;
+  return st.slice(i, j);
+}
+
+/**
+ * Dikte van de afwerking (gipsplaat) die aan elke kant van de muur op
+ * metselwerk zit, links en rechts van start → einde.
+ */
+function finishSides(w: Wall, outsideSign: 1 | -1 | undefined): { left: number; right: number } {
+  const st = wallLayers(w);
+  if (st.length < 2) return { left: 0, right: 0 };
+  const first = FINISH.has(st[0].material) && MASONRY.has(st[1].material) ? st[0].thickness : 0;
+  const last = FINISH.has(st[st.length - 1].material) && MASONRY.has(st[st.length - 2].material) ? st[st.length - 1].thickness : 0;
+  // laag 0 ligt links, behalve bij een gevel met buiten rechts
+  return outsideSign === -1 ? { left: last, right: first } : { left: first, right: last };
+}
+
+/** Twee muren met dezelfde massieve kern (één materiaal): ze vormen één geheel. */
+function bonded(a: Wall, b: Wall): boolean {
+  const ca = coreLayers(a);
+  const cb = coreLayers(b);
+  return ca.length === 1 && cb.length === 1 && ca[0].material === cb[0].material && MASONRY.has(ca[0].material);
 }
 
 /**
@@ -382,7 +425,8 @@ export function wallPolygons(
         if (hitR && length(sub(hitR, p)) <= lim) R = hitR;
       };
       const parallel = (o: End) => Math.abs(cross(o.d, e.d)) < 1e-6;
-      const sameKind = (o: End) => o.wall.type === e.wall.type && o.wall.thickness === e.wall.thickness;
+      // zelfde opbouw, of hetzelfde metselwerk (bv. snelbouw van 10 en van 15 cm): één geheel, geen voeg
+      const sameKind = (o: End) => (o.wall.type === e.wall.type && o.wall.thickness === e.wall.thickness) || bonded(o.wall, e.wall);
       // voeg tussen twee muren in elkaars verlengde: enkel waar ze elkaar echt raken
       // (een dikkere muur steekt uit; dat stuk is een vrij vlak of raakt een dwarsmuur)
       const jointWith = (o: End) => {
@@ -710,6 +754,12 @@ export interface FloorAnalysis {
   joints: [Vec, Vec][];
   /** Isolatiesymbool (zigzag of golf) per isolatielaag. */
   insulation: { pts: Vec[]; soft: boolean }[];
+  /**
+   * Pleister/gipsplaat aan de kant van een ruimte loopt rond de ruimte, als
+   * één band: [binnenkant, lijn achter de afwerking] per ruimte.
+   */
+  finishBands: Vec[][][];
+  finishLines: [Vec, Vec][];
 }
 
 export interface LayerShape {
@@ -813,7 +863,23 @@ function computeAnalysis(floor: Floor): FloorAnalysis {
   }
   const joints: [Vec, Vec][] = [];
   const wallPolys = wallPolygons(g, cornerPairs, joints);
-  const { layers, layerLines, insulation } = wallLayerShapes(floor, wallPolys, wallOutside);
+  // afwerking aan de kant van een ruimte: één band rond de ruimte, zoals de pleisterlaag
+  const roomSides = new Set<string>();
+  for (const f of bounded) for (const e of f.edges) roomSides.add(`${e.wall.id}|${e.from.id === e.wall.start ? "left" : "right"}`);
+  const finishOf = (e: HalfEdge) => finishSides(e.wall, wallOutside.get(e.wall.id))[e.from.id === e.wall.start ? "left" : "right"];
+  const finishBands: Vec[][][] = [];
+  const finishLines: [Vec, Vec][] = [];
+  bounded.forEach((f, i) => {
+    if (!f.edges.some((e) => finishOf(e) > 0)) return;
+    const c = offsetContour(f, (e) => leftExtent(e.wall, e.from.id) - finishOf(e));
+    finishBands.push([rooms[i].inner, c.points]);
+    const fin = new Map(f.edges.map((e) => [e.wall.id, finishOf(e)]));
+    c.points.forEach((p, k) => {
+      const q = c.points[(k + 1) % c.points.length];
+      if ((fin.get(c.walls[k]) ?? 0) > 0 && length(sub(q, p)) > 0.5) finishLines.push([p, q]);
+    });
+  });
+  const { layers, layerLines, insulation } = wallLayerShapes(floor, wallPolys, wallOutside, roomSides);
   let outerBounds: FloorAnalysis["outerBounds"] = null;
   for (const poly of wallPolys.values()) {
     for (const p of poly) {
@@ -842,6 +908,8 @@ function computeAnalysis(floor: Floor): FloorAnalysis {
     layerLines,
     joints,
     insulation,
+    finishBands,
+    finishLines,
   };
 }
 
@@ -888,6 +956,8 @@ function wallLayerShapes(
   floor: Floor,
   wallPolys: Map<Id, Vec[]>,
   outside: Map<Id, 1 | -1>,
+  /** Muurkanten aan een ruimte ("id|left"): daar hoort de afwerking bij de ruimte, niet bij de muur. */
+  roomSides: Set<string>,
 ): Pick<FloorAnalysis, "layers" | "layerLines" | "insulation"> {
   const byId = new Map(floor.nodes.map((n) => [n.id, n]));
   const layers: LayerShape[] = [];
@@ -904,7 +974,20 @@ function wallLayerShapes(
     // laag 0 aan de buitenkant; binnenmuren van links naar rechts
     const dir = outside.get(w.id) === -1 ? 1 : -1;
     let sigma = dir === -1 ? sides.left : -sides.right;
-    const stack = wallLayers(w);
+    // gipsplaat aan een ruimte: bij de kern rekenen (de band rond de ruimte tekent ze)
+    let stack = wallLayers(w).map((l) => ({ ...l }));
+    const fin = finishSides(w, outside.get(w.id));
+    const firstLeft = outside.get(w.id) !== -1;
+    const mergeL = fin.left > 0 && roomSides.has(`${w.id}|left`);
+    const mergeR = fin.right > 0 && roomSides.has(`${w.id}|right`);
+    if (firstLeft ? mergeL : mergeR) {
+      stack[1].thickness += stack[0].thickness;
+      stack = stack.slice(1);
+    }
+    if ((firstLeft ? mergeR : mergeL) && stack.length > 1) {
+      stack[stack.length - 2].thickness += stack[stack.length - 1].thickness;
+      stack = stack.slice(0, -1);
+    }
     stack.forEach((layer, i) => {
       const next = sigma + dir * layer.thickness;
       const lo = Math.min(sigma, next);

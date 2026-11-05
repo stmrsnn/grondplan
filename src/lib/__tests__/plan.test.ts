@@ -598,3 +598,27 @@ describe("voegen bij een overgang van dikte", () => {
     }
   });
 });
+
+describe("muren uit hetzelfde metselwerk", () => {
+  it("vormen één geheel: geen voeg, en de gipsplaat loopt rond de ruimte", async () => {
+    const { setCustomWallTypes } = await import("../model/wallTypes");
+    setCustomWallTypes([
+      { id: "eigen-15", name: "15", hint: "", exterior: false, loadBearing: true, layers: [{ material: "gips", thickness: 10 }, { material: "snelbouw", thickness: 130 }, { material: "gips", thickness: 10 }] },
+      { id: "eigen-10", name: "10", hint: "", exterior: false, loadBearing: false, layers: [{ material: "gips", thickness: 10 }, { material: "snelbouw", thickness: 80 }, { material: "gips", thickness: 10 }] },
+    ]);
+    const ip = (thickness: number, type: string) => ({ thickness, height: 2600, kind: "interior" as const, loadBearing: false, type });
+    let f = addRectangle(empty(), { x: -190, y: -2190 }, { x: 6190, y: 2190 }, { ...EXT, thickness: 380, type: "spouw-38" }, ids);
+    f = addPolyline(f, [{ x: -190, y: 0 }, { x: 3000, y: 0 }], ip(100, "eigen-10"), ids);
+    f = addPolyline(f, [{ x: 3000, y: 0 }, { x: 6190, y: 0 }], ip(150, "eigen-15"), ids);
+    f = addPolyline(f, [{ x: 3000, y: -2190 }, { x: 3000, y: 0 }], ip(150, "eigen-15"), ids);
+    f = { ...f, walls: f.walls.map((w) => (w.thickness === 100 ? { ...w, offset: f.nodes.find((n) => n.id === w.start)!.x < 0 ? 25 : -25 } : w)) };
+    const a = analyzeFloor(f);
+    const near = (p: { x: number; y: number }) => Math.abs(p.x - 3000) <= 80 && Math.abs(p.y) <= 80;
+    expect(a.joints.filter(([p, q]) => near(p) && near(q))).toHaveLength(0);
+    // gipsplaat: de lijn 1 cm in de muur, rond de hoek van de kamer linksboven
+    const keys = new Set(a.finishLines.map(([p, q]) => [p, q].map((v) => `${Math.round(v.x)},${Math.round(v.y)}`).sort().join("|")));
+    expect([...keys].some((k) => k.includes("2935,-15"))).toBe(true);
+    expect(a.finishBands.length).toBe(3);
+    setCustomWallTypes([]);
+  });
+});

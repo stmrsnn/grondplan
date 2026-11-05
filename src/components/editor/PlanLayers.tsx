@@ -117,7 +117,8 @@ export const FloorLayer = memo(function FloorLayer({
     return {
       walls: [...analysis.wallPolys.values()].map(path).join(""),
       byMaterial: [...byMaterial.entries()],
-      lines: [...analysis.layerLines, ...analysis.joints].map(([a, b]) => `M${a.x} ${a.y}L${b.x} ${b.y}`).join(""),
+      lines: [...analysis.layerLines, ...analysis.joints, ...analysis.finishLines].map(([a, b]) => `M${a.x} ${a.y}L${b.x} ${b.y}`).join(""),
+      finish: analysis.finishBands.map(([room, back]) => path(room) + path(back)).join(""),
       hard: analysis.insulation.filter((i) => !i.soft).map((i) => `M${i.pts.map((p) => `${p.x} ${p.y}`).join("L")}`).join(""),
       soft: analysis.insulation.filter((i) => i.soft).map((i) => wave(i.pts)).join(""),
       outline: [
@@ -143,6 +144,8 @@ export const FloorLayer = memo(function FloorLayer({
       {drawing.byMaterial.map(([m, d]) =>
         HATCH[m] ? <path key={m} d={d} fill={`url(#hatch-${m})`} /> : null,
       )}
+      {/* pleister/gipsplaat rond elke ruimte: een witte band over de arcering */}
+      {drawing.finish && <path d={drawing.finish} fill="var(--plan-paper)" fillRule="evenodd" />}
       <path d={drawing.lines} fill="none" stroke="var(--plan-ink)" strokeWidth={0.5} vectorEffect="non-scaling-stroke" />
       {drawing.hard && (
         <path d={drawing.hard} fill="none" stroke="var(--plan-hatch)" strokeWidth={0.6} strokeLinejoin="miter" vectorEffect="non-scaling-stroke" />
