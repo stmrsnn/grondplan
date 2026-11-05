@@ -221,9 +221,15 @@ export function buildFurniture(def: FurnitureDef, W: number, D: number, H: numbe
     case "hoeksofa": {
       const left = !def.opt?.left;
       const seat = Math.min(1.0, d * 0.5);
-      // lange deel langs de rug, chaise naar voren aan de ene kant
-      sofaPart(b, fab, "metaal:#26272a", w - seat, seat, Math.max(1, Math.round((w - seat) / 0.8)), left ? [false, true] : [true, false], left ? seat / 2 : -seat / 2, -d / 2 + seat / 2);
-      sofaPart(b, fab, "metaal:#26272a", d, seat, Math.max(1, Math.round(d / 0.9)), [false, true], left ? -w / 2 + seat / 2 : w / 2 - seat / 2, 0, left ? -Math.PI / 2 : Math.PI / 2);
+      // L: lange deel met rug langs de achterkant, zijdeel met rug tegen de zijkant,
+      // armleuningen aan beide open uiteinden
+      const sx = left ? -1 : 1;
+      const legMat: FMat = "metaal:#26272a";
+      sofaPart(b, fab, legMat, w - seat, seat, Math.max(1, Math.round((w - seat) / 0.8)), left ? [false, true] : [true, false], -sx * (seat / 2), -d / 2 + seat / 2);
+      // zijdeel gedraaid: rug naar de zijkant (buiten), lokale -x wordt de voorkant
+      sofaPart(b, fab, legMat, d, seat, Math.max(1, Math.round(d / 0.9)), left ? [true, false] : [false, true], sx * (w / 2 - seat / 2), 0, left ? Math.PI / 2 : -Math.PI / 2);
+      // rug in de hoek dichten
+      b.box(fab, seat - 0.2, 0.42, 0.2, sx * (w / 2 - (seat + 0.2) / 2), 0.3, -d / 2 + 0.1, 0.05);
       break;
     }
     case "poef":

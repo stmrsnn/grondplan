@@ -122,7 +122,9 @@ export function planSymbol(def: FurnitureDef, w: number, d: number): PlanSymbol 
         const a = left ? x0 + seatD + (seatsLen / k) * i : x1 - seatD - (seatsLen / k) * (i + 1);
         l.push(rect(a + 8, y0 + back + 8, a + seatsLen / k - 8, y0 + seatD - 30, 40));
       }
-      l.push(rect(cx + s * (back + 8), y0 + back + 8, cx + s * (seatD - 30), y1 - 30, 40));
+      // armleuning aan het einde van het zijdeel
+      l.push(rect(cx, y1 - arm, cx + s * seatD, y1, 40));
+      l.push(rect(cx + s * (back + 8), y0 + back + 8, cx + s * (seatD - 30), y1 - arm - 8, 40));
       break;
     }
     case "poef":
