@@ -1,4 +1,5 @@
 import { addRectangle, functionLabel } from "../geometry/plan";
+import { cleanFrame, cleanFrameType, type FrameType } from "./frames";
 import { cleanWallType, DEFAULT_EXTERIOR_TYPE, DEFAULT_INTERIOR_TYPE, typeForThickness, typeThickness, wallType, type WallType } from "./wallTypes";
 import {
   SCHEMA_VERSION,
@@ -130,6 +131,9 @@ export function migrateDoc(raw: unknown, fallbackName = "Naamloos project"): Pro
       customWallTypes: Array.isArray(s.customWallTypes)
         ? s.customWallTypes.map(cleanWallType).filter((t): t is WallType => t !== null)
         : [],
+      customFrameTypes: Array.isArray(s.customFrameTypes)
+        ? s.customFrameTypes.map(cleanFrameType).filter((t): t is FrameType => t !== null)
+        : [],
     },
     floors: floors.map((f, i) => {
       const floor = { ...createFloor(`Verdieping ${i}`), ...f };
@@ -139,6 +143,16 @@ export function migrateDoc(raw: unknown, fallbackName = "Naamloos project"): Pro
           const type = w.type ?? typeForThickness(w.thickness, w.kind);
           return type ? { ...w, type } : w;
         });
+      // samengestelde ramen nakijken (een kapotte samenstelling valt weg: dan een gewoon raam)
+      floor.openings = (floor.openings ?? []).map((o) => {
+        if (o.frame === undefined) return o;
+        const frame = cleanFrame(o.frame);
+        if (frame) return { ...o, frame };
+        const { frame: _f, frameType: _t, ...rest } = o;
+        void _f;
+        void _t;
+        return rest;
+      });
       return floor;
     }),
   };

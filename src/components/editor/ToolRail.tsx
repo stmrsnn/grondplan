@@ -2,7 +2,8 @@
 
 import { DoorOpen, Grid2x2, MousePointer2, PenLine, Square } from "lucide-react";
 import { formatMeters } from "@/lib/format";
-import { CHOICES, DOOR_CHOICES, WINDOW_CHOICES, type OpeningChoice } from "@/lib/geometry/openings";
+import { choiceInfo, isChoice, type OpeningChoice } from "@/lib/geometry/openings";
+import { ChoiceTiles } from "./ChoiceTiles";
 import type { WallDefaults } from "@/lib/model/types";
 import { ROOM_TEMPLATES, type RoomTemplate, type Tool, type WallChoice } from "./usePlanTools";
 
@@ -48,7 +49,9 @@ export function ToolRail({
   setOpeningWidth: (w: Partial<Record<OpeningChoice, number>>) => void;
 }) {
   const group = tool === "door" ? "door" : tool === "window" ? "window" : null;
-  const choice = group ? openingChoice[group] : null;
+  const picked = group ? openingChoice[group] : null;
+  const choice = group ? (isChoice(picked ?? undefined) ? picked : group === "window" ? "draaikiep" : "single") : null;
+  const info = choice ? choiceInfo(choice) : null;
   const chip = (on: boolean) =>
     `rounded-full border px-2 py-0.5 text-[12px] ${on ? "border-accent bg-accent text-on-accent" : "border-line text-ink hover:border-accent hover:bg-accent-soft"}`;
   const active = TOOLS.find((t) => t.id === tool)!;
@@ -105,19 +108,8 @@ export function ToolRail({
           )}
           {group && choice && (
             <>
-              <div className="flex flex-wrap gap-1" role="radiogroup" aria-label="Soort">
-                {(group === "door" ? DOOR_CHOICES : WINDOW_CHOICES).map((c) => (
-                  <button
-                    key={c}
-                    type="button"
-                    role="radio"
-                    aria-checked={choice === c}
-                    onClick={() => setOpeningChoice({ ...openingChoice, [group]: c })}
-                    className={chip(choice === c)}
-                  >
-                    {CHOICES[c].label}
-                  </button>
-                ))}
+              <div className="-mr-1 max-h-[46vh] overflow-y-auto pr-1">
+                <ChoiceTiles group={group} value={choice} onPick={(c) => setOpeningChoice({ ...openingChoice, [group]: c })} />
               </div>
               <div className="flex flex-col gap-1.5">
                 <span className="text-[11px] font-medium uppercase tracking-wide text-ink-3">Breedte in cm</span>
@@ -131,7 +123,7 @@ export function ToolRail({
                   >
                     Vanzelf
                   </button>
-                  {CHOICES[choice].widths.map((w) => (
+                  {(info?.widths ?? []).map((w) => (
                     <button
                       key={w}
                       type="button"

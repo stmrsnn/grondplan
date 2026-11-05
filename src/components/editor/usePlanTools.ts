@@ -27,8 +27,9 @@ import {
   cornerGaps,
   fitOffset,
   hitOpening,
+  choiceInfo,
   choiceProps,
-  CHOICES,
+  isChoice,
   openingName,
   openingSpan,
   roomSide,
@@ -41,6 +42,7 @@ import {
 } from "@/lib/geometry/openings";
 import { closestOnSegment, distance, dot, snapValue, type Vec } from "@/lib/geometry/vec";
 import { editFloor } from "@/lib/model/commands";
+import { mirrorFrame } from "@/lib/model/frames";
 import type { Floor, Id, Opening, ProjectDoc } from "@/lib/model/types";
 import type { ToolPointerEvent } from "./PlanCanvas";
 import type { Selection } from "./PlanLayers";
@@ -139,7 +141,7 @@ export function usePlanTools({ store, doc, floor, view, selection, setSelection,
   /** Gekozen soort en breedte bij het deur- en raamgereedschap (null = vanzelf). */
   const [openingChoice, setOpeningChoice] = useState<{ door: OpeningChoice; window: OpeningChoice }>({
     door: "single",
-    window: "window",
+    window: "draaikiep",
   });
   const [openingWidth, setOpeningWidth] = useState<Partial<Record<OpeningChoice, number>>>({});
   /** Net getekende kamer: daar tonen we meteen de functieknoppen. */
@@ -390,8 +392,10 @@ export function usePlanTools({ store, doc, floor, view, selection, setSelection,
       lastCursor.current = e.world;
 
       if (tool === "door" || tool === "window") {
-        const choice = tool === "window" ? openingChoice.window : openingChoice.door;
-        const label = CHOICES[choice].label;
+        const picked = tool === "window" ? openingChoice.window : openingChoice.door;
+        // een eigen soort die intussen verwijderd is: terug naar de standaard
+        const choice = isChoice(picked) ? picked : tool === "window" ? "draaikiep" : "single";
+        const label = choiceInfo(choice)?.label ?? "Raam";
         if (e.phase === "hover" || e.phase === "move" || e.phase === "down") {
           const o = openingAt(e.world, choice, zoom);
           setPreview({ snap: null, chain: null, rect: null, chip: null, opening: o });
@@ -712,7 +716,15 @@ export function usePlanTools({ store, doc, floor, view, selection, setSelection,
       if (key === "k") return setTool("room"), true;
       if (selection?.kind === "opening" && (key === "f" || key === "h")) {
         const o = floor.openings.find((x) => x.id === selection.id);
-        if (!o || o.kind === "window") return false;
+        if (!o) return false;
+        // samengesteld: H spiegelt de vakken (scharnieren aan de andere kant)
+        if (o.frame && key === "h") {
+          const after = updateOpening(floor, o.id, { frame: mirrorFrame(o.frame) });
+          const name = openingName(o);
+          if (after) commit(after, `${name} gespiegeld`, `${name} teruggespiegeld`, `${name} opnieuw gespiegeld`);
+          return true;
+        }
+        if (o.kind === "window" && (!o.frame || floor.walls.find((w) => w.id === o.wall)?.kind === "exterior")) return false;
         const sw = o.swing ?? { side: "left" as const, hinge: "start" as const };
         const swing =
           key === "f"

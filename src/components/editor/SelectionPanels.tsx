@@ -1,6 +1,10 @@
 "use client";
 
-import { FlipHorizontal2, FlipVertical2, Trash2 } from "lucide-react";
+import { FlipHorizontal2, FlipVertical2, SlidersHorizontal, Trash2 } from "lucide-react";
+import { describeFrame, mirrorFrame } from "@/lib/model/frames";
+import { ChoiceTiles } from "./ChoiceTiles";
+import { useFrameEditor } from "./FrameDialog";
+import { FramePreview } from "./FramePreview";
 import { Button } from "@/components/ui/Button";
 import { Field, Toggle } from "@/components/ui/Field";
 import { TermHelp } from "@/components/ui/Help";
@@ -24,12 +28,12 @@ import { LayerStack, WallTypeSelect } from "./WallTypeSelect";
 import { typeForThickness, typeThickness, wallLayers, wallType } from "@/lib/model/wallTypes";
 import { alignWall, wallAlignment } from "@/lib/geometry/plan";
 import {
-  CHOICES,
+  choiceInfo,
   choiceOf,
   choiceProps,
   cornerGaps,
-  DOOR_CHOICES,
   doorConflicts,
+  frameOf,
   GLASS_FACTOR,
   LINTEL_LIMIT,
   needsLintel,
@@ -38,7 +42,6 @@ import {
   roomDaylight,
   updateOpening,
   wallFrame,
-  WINDOW_CHOICES,
   type OpeningChoice,
 } from "@/lib/geometry/openings";
 import type { Selection } from "./PlanLayers";
@@ -174,7 +177,7 @@ export function SelectionPanel({
   }
 
   if (selection.kind === "opening") {
-    return <OpeningPanel store={store} floor={floor} analysis={analysis} openingId={selection.id} onDelete={onDelete} />;
+    return <OpeningPanel key={selection.id} store={store} floor={floor} analysis={analysis} openingId={selection.id} onDelete={onDelete} />;
   }
 
   if (selection.kind === "wall") {
@@ -480,7 +483,9 @@ function OpeningPanel({
   openingId: string;
   onDelete: () => void;
 }) {
+  const openFrameEditor = useFrameEditor();
   const o = floor.openings.find((x) => x.id === openingId);
+  const [tilesGroup, setTilesGroup] = useState<"door" | "window">(o?.kind === "window" ? "window" : "door");
   const frame = o ? wallFrame(floor, o.wall) : null;
   if (!o || !frame) return <p className="text-sm text-ink-3">Deze opening bestaat niet meer.</p>;
   const label = openingName(o);
@@ -504,9 +509,8 @@ function OpeningPanel({
     apply({ ...props, variant: props.variant }, "soort");
   };
   const conflict = o.kind === "door" ? doorConflicts(floor, analysis).get(o.id) : undefined;
-  const turns = o.kind === "door" && (choice === "single" || choice === "double");
-  const chip = (on: boolean) =>
-    `rounded-full border px-2.5 py-1 text-[12.5px] ${on ? "border-accent bg-accent text-on-accent" : "border-line text-ink hover:border-accent hover:bg-accent-soft"}`;
+  const turns = o.kind === "door" && (choice === "single" || choice === "double" || !!o.frame);
+  const preview = frameOf(o);
 
   const startField = (
     <LengthField key="s" label={`Tot de hoek ${startWord}`} value={gaps.start} min={0} max={frame.len} onCommit={(mm) => apply({ offset: o.offset + (mm - gaps.start) }, "plaats")} />
@@ -523,16 +527,38 @@ function OpeningPanel({
           In een {frame.wall.kind === "exterior" ? "buitenmuur" : "binnenmuur"}
         </span>
       </div>
-      <div className="flex flex-col gap-2" role="radiogroup" aria-label="Soort">
-        {[DOOR_CHOICES, WINDOW_CHOICES].map((list, i) => (
-          <div key={i} className="flex flex-wrap gap-1.5">
-            {list.map((c) => (
-              <button key={c} type="button" role="radio" aria-checked={choice === c} onClick={() => setChoice(c)} className={chip(choice === c)}>
-                {CHOICES[c].label}
-              </button>
-            ))}
+      {preview && (
+        <div className="flex items-center gap-3 rounded-[var(--radius-card)] bg-surface-2 p-3">
+          <FramePreview frame={preview} width={openingSpan(o)} height={o.height} sill={o.sillHeight} showFloor maxW={96} maxH={110} label={`Vooraanzicht ${label.toLowerCase()}`} />
+          <div className="flex min-w-0 flex-1 flex-col items-start gap-2">
+            <span className="text-[12.5px] leading-snug text-ink-2">
+              {describeFrame(preview)}
+              <span className="block text-[11.5px] text-ink-3">Van binnen gezien</span>
+            </span>
+            {openFrameEditor && (
+              <Button size="sm" variant="secondary" icon={<SlidersHorizontal size={15} />} onClick={() => openFrameEditor({ openingId: o.id })}>
+                Aanpassen
+              </Button>
+            )}
           </div>
-        ))}
+        </div>
+      )}
+      <div className="flex flex-col gap-2">
+        <div className="flex rounded-[var(--radius-control)] bg-surface-2 p-0.5 text-[12.5px]" role="tablist" aria-label="Deuren of ramen">
+          {(["door", "window"] as const).map((g) => (
+            <button
+              key={g}
+              type="button"
+              role="tab"
+              aria-selected={tilesGroup === g}
+              onClick={() => setTilesGroup(g)}
+              className={`h-7 flex-1 rounded-[6px] ${tilesGroup === g ? "border border-line bg-bg font-medium text-ink" : "text-ink-3 hover:text-ink"}`}
+            >
+              {g === "door" ? "Deuren" : "Ramen"}
+            </button>
+          ))}
+        </div>
+        <ChoiceTiles group={tilesGroup} value={choice} onPick={setChoice} columns={4} />
       </div>
       {conflict && (
         <Warning>
@@ -548,7 +574,7 @@ function OpeningPanel({
         max={8000}
         hint={
           <span className="inline-flex flex-wrap gap-1.5">
-            {CHOICES[choice].widths.map((w) => (
+            {(choiceInfo(choice)?.widths ?? []).map((w) => (
               <button
                 key={w}
                 type="button"
@@ -598,7 +624,17 @@ function OpeningPanel({
             >
               {turns ? "Andere kant opendraaien" : "Naar de andere kant"}
             </Button>
-            {choice !== "double" && choice !== "garage" && (
+            {o.frame ? (
+              <Button
+                size="sm"
+                variant="secondary"
+                icon={<FlipHorizontal2 size={16} />}
+                title="Sneltoets H"
+                onClick={() => apply({ frame: mirrorFrame(o.frame!) }, "spiegeling")}
+              >
+                Spiegelen
+              </Button>
+            ) : choice !== "double" && choice !== "garage" && (
               <Button
                 size="sm"
                 variant="secondary"

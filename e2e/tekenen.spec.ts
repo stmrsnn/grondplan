@@ -196,8 +196,9 @@ test("deur en raam plaatsen, aanpassen, verwijderen en terugzetten", async ({ pa
   await page.mouse.click(door.x, door.y);
   expect(await arcs()).toBe(1);
 
-  // raam in de bovenste gevel
+  // vast raam in de bovenste gevel (zonder draaiboog)
   await page.keyboard.press("r");
+  await page.getByRole("radio", { name: "Vast raam" }).click();
   await page.mouse.move(o.x0 + 3000 * o.k, o.y0 + 190 * o.k + 8);
   await page.mouse.click(o.x0 + 3000 * o.k, o.y0 + 190 * o.k + 8);
 
@@ -370,4 +371,47 @@ test("een dunnere muur rechtdoor: kiezen welk vlak doorloopt", async ({ page }) 
   await expect(page.getByText(/beide vlakken verspringen/)).toBeHidden();
   await page.keyboard.press("Control+z");
   await expect(group.getByRole("button", { name: "Geen (midden)" })).toHaveAttribute("aria-pressed", "true");
+});
+
+test("een raam samenstellen: vast + draaikiep, en bewaren als eigen soort", async ({ page }) => {
+  const box = await canvas(page);
+  await page.keyboard.press("k");
+  await page.mouse.click(box.x + 600, box.y + 200);
+  await page.mouse.move(box.x + 800, box.y + 400);
+  await page.keyboard.type("5x4");
+  await page.keyboard.press("Enter");
+  await page.keyboard.press("Escape");
+  const o = await page.evaluate(() => {
+    const p = document.querySelector("svg[role=application] [data-walls]")!;
+    const r = p.getBoundingClientRect();
+    return { x0: r.x, y0: r.y, k: r.width / 5760 };
+  });
+  // een ingebouwd samengesteld raam plaatsen
+  await page.keyboard.press("r");
+  await page.getByRole("radio", { name: "Vast + draaikiep" }).click();
+  const at = { x: o.x0 + 2500 * o.k, y: o.y0 + 190 * o.k + 8 };
+  await page.mouse.move(at.x, at.y);
+  await page.mouse.click(at.x, at.y);
+  await page.keyboard.press("v");
+  await page.mouse.click(at.x, o.y0 + 190 * o.k);
+  await expect(page.getByRole("heading", { name: "Vast + draaikiep" })).toBeVisible();
+  await expect(page.getByRole("img", { name: /Vooraanzicht/ })).toBeVisible();
+
+  // vakken aanpassen: een derde vak, en bewaren als eigen soort
+  await page.getByRole("button", { name: "Aanpassen" }).click();
+  const dialog = page.getByRole("dialog", { name: "Raam samenstellen" });
+  await dialog.getByRole("button", { name: "Vak toevoegen" }).click();
+  await dialog.getByLabel("Soort vak 3").selectOption("kiep");
+  await dialog.getByLabel("Breedte in cm").fill("240");
+  await dialog.getByRole("switch", { name: /Ook bewaren als eigen soort/ }).click();
+  await dialog.getByRole("textbox", { name: "Naam" }).fill("Leefruimteraam");
+  await dialog.getByRole("button", { name: "Bewaren" }).click();
+  await expect(dialog).toBeHidden();
+  await expect(page.getByRole("heading", { name: "Leefruimteraam" })).toBeVisible();
+  await expect(page.getByRole("textbox", { name: /^Breedte/ })).toHaveValue("2,40 m");
+
+  // de eigen soort staat nu bij het raamgereedschap
+  await page.keyboard.press("Escape");
+  await page.keyboard.press("r");
+  await expect(page.getByRole("radio", { name: "Leefruimteraam" })).toBeVisible();
 });

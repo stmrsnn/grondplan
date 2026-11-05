@@ -254,6 +254,16 @@ function OpeningSymbol({
           />
         </g>
       ))}
+      {/* raamvleugels die naar binnen draaien: een fijne boog */}
+      {shape.sashes.length > 0 && (
+        <path
+          d={shape.sashes.map((l) => `M${l.tip.x} ${l.tip.y}A${l.radius} ${l.radius} 0 0 ${l.sweep} ${l.to.x} ${l.to.y}`).join("")}
+          fill="none"
+          stroke={ink}
+          strokeWidth={0.45}
+          vectorEffect="non-scaling-stroke"
+        />
+      )}
       {shape.panels.length > 0 && (
         <path d={polys(shape.panels)} fill="var(--plan-paper)" stroke={ink} strokeWidth={1.1} vectorEffect="non-scaling-stroke" />
       )}

@@ -20,6 +20,10 @@ import { addFloor, docCmd, editFloor, renameProject, restoreVersion, updateRoom 
 import { setCustomWallTypes, wallType } from "@/lib/model/wallTypes";
 import { canDeleteWallType, deleteWallType, newCustomTypeId, saveWallType, typeUsage } from "@/lib/model/wallTypeOps";
 import { WallTypeDialog, WallTypeEditorContext } from "./WallTypeDialog";
+import { FrameDialog, FrameEditorContext, type FrameDialogResult, type FrameEditorOpts } from "./FrameDialog";
+import { frameOf, openingName, openingSpan, updateOpening } from "@/lib/geometry/openings";
+import { frameType, hasDoor, isCustomFrameType, setCustomFrameTypes, FRAME_PRESETS, DOOR_PRESETS } from "@/lib/model/frames";
+import { deleteFrameType, frameTypeUsage, newFrameTypeId, saveFrameType } from "@/lib/model/frameOps";
 import { floorsBottomUp } from "@/lib/model/doc";
 import type { Vec } from "@/lib/geometry/vec";
 import type { Floor, ProjectDoc, Underlay } from "@/lib/model/types";
@@ -86,10 +90,15 @@ export function Editor({ initialDoc, backend, email }: EditorProps) {
   const floor = doc.floors.find((f) => f.id === activeFloorId) ?? doc.floors[0];
   // eigen muurtypes van dit project aanmelden vóór er getekend wordt
   setCustomWallTypes(doc.settings.customWallTypes);
+  setCustomFrameTypes(doc.settings.customFrameTypes);
 
   // ---------- eigen muurtypes ----------
   const [wallTypeEdit, setWallTypeEdit] = useState<{ edit?: string; onCreated?: (id: string) => void } | null>(null);
   const openWallTypeEditor = useCallback((opts: { edit?: string; onCreated?: (id: string) => void }) => setWallTypeEdit(opts), []);
+
+  // ---------- ramen en deuren samenstellen ----------
+  const [frameEdit, setFrameEdit] = useState<FrameEditorOpts | null>(null);
+  const openFrameEditor = useCallback((opts: FrameEditorOpts) => setFrameEdit(opts), []);
 
   // ---------- automatisch bewaren ----------
   const [saveStatus, setSaveStatus] = useState<SaveStatus>("saved");
@@ -454,8 +463,83 @@ export function Editor({ initialDoc, backend, email }: EditorProps) {
     router.push("/projecten");
   };
 
+  /** Dialoog om een raam of deur samen te stellen: voor een geplaatst raam of een eigen soort. */
+  const renderFrameDialog = (opts: FrameEditorOpts) => {
+    const close = () => setFrameEdit(null);
+    const o = opts.openingId ? floor.openings.find((x) => x.id === opts.openingId) : undefined;
+    if (o) {
+      const kind = o.kind === "door" ? "deur" : "raam";
+      return (
+        <FrameDialog
+          title={`${o.kind === "door" ? "Deur" : "Raam"} samenstellen`}
+          mode="opening"
+          initial={{ frame: frameOf(o) ?? { sashes: [{ type: "vast" }] }, width: openingSpan(o), height: o.height, sillHeight: o.sillHeight }}
+          onClose={close}
+          onSave={(r: FrameDialogResult) => {
+            let d = doc;
+            let typeId: string | undefined;
+            if (r.saveAs) {
+              typeId = newFrameTypeId();
+              d = saveFrameType(d, { id: typeId, name: r.saveAs, frame: r.frame, width: r.width, height: r.height, sillHeight: r.sillHeight });
+            }
+            const f = d.floors.find((x) => x.id === floor.id)!;
+            const after = updateOpening(f, o.id, {
+              frame: r.frame,
+              frameType: typeId,
+              kind: hasDoor(r.frame) ? "door" : "window",
+              variant: undefined,
+              width: r.width,
+              height: r.height,
+              sillHeight: r.sillHeight,
+              swing: o.swing ?? { side: "left", hinge: "start" },
+            });
+            if (!after) {
+              toast.show(`Zo breed past dit ${kind} niet in de muur.`);
+              return;
+            }
+            d = { ...d, floors: d.floors.map((x) => (x.id === floor.id ? after : x)) };
+            const name = r.saveAs ?? openingName(o);
+            store.execute(docCmd(doc, d, `${name} samengesteld`, `${name}: vorige samenstelling terug`, `${name} opnieuw samengesteld`));
+            store.seal();
+            close();
+            if (r.saveAs) toast.show(`"${r.saveAs}" staat nu bij de ${hasDoor(r.frame) ? "deuren" : "ramen"}`);
+          }}
+        />
+      );
+    }
+    const existing = opts.typeId && isCustomFrameType(opts.typeId) ? frameType(opts.typeId) : null;
+    const start = existing ?? (opts.group === "door" ? DOOR_PRESETS[1] : FRAME_PRESETS[2]);
+    return (
+      <FrameDialog
+        title={existing ? "Eigen soort bewerken" : opts.group === "door" ? "Eigen deur samenstellen" : "Eigen raam samenstellen"}
+        mode="type"
+        initial={{ ...start, name: existing?.name ?? "" }}
+        usage={existing ? frameTypeUsage(doc, existing.id) : 0}
+        canDelete={!!existing}
+        onClose={close}
+        onDelete={() => {
+          if (!existing) return;
+          store.execute(docCmd(doc, deleteFrameType(doc, existing.id), `"${existing.name}" verwijderd`, `"${existing.name}" teruggezet`, `"${existing.name}" opnieuw verwijderd`));
+          store.seal();
+          close();
+        }}
+        onSave={(r: FrameDialogResult) => {
+          const id = existing?.id ?? newFrameTypeId();
+          const name = r.saveAs ?? existing?.name ?? "Eigen raam";
+          const after = saveFrameType(doc, { id, name, frame: r.frame, width: r.width, height: r.height, sillHeight: r.sillHeight });
+          store.execute(docCmd(doc, after, existing ? `"${name}" aangepast` : `"${name}" gemaakt`, `"${name}": ongedaan`, `"${name}": opnieuw`));
+          store.seal();
+          close();
+          if (!existing) opts.onCreated?.(id);
+          toast.show(existing ? `"${name}" bewaard` : `"${name}" staat nu bij de ${hasDoor(r.frame) ? "deuren" : "ramen"}`);
+        }}
+      />
+    );
+  };
+
   return (
     <WallTypeEditorContext.Provider value={openWallTypeEditor}>
+    <FrameEditorContext.Provider value={openFrameEditor}>
     <div className="flex h-dvh flex-col overflow-hidden">
       <header className="flex h-14 shrink-0 items-center gap-2 border-b border-line bg-bg px-2 sm:px-3">
         <Link
@@ -842,6 +926,7 @@ export function Editor({ initialDoc, backend, email }: EditorProps) {
           }}
         />
       )}
+      {frameEdit && renderFrameDialog(frameEdit)}
       {underlayOpen && <UnderlayDialog open onClose={() => setUnderlayOpen(false)} onDone={placeUnderlay} />}
       <VersionsDialog
         open={versionsOpen}
@@ -909,6 +994,7 @@ export function Editor({ initialDoc, backend, email }: EditorProps) {
         </p>
       </Dialog>
     </div>
+    </FrameEditorContext.Provider>
     </WallTypeEditorContext.Provider>
   );
 }

@@ -7,6 +7,17 @@
  * de hoeken, de vorm om te tekenen, botsende deuren en daglicht.
  */
 import type { Floor, Id, Opening, OpeningKind, OpeningVariant, Wall } from "../model/types";
+import {
+  customFrameTypes,
+  FRAME_STILE,
+  frameType,
+  glassShare,
+  hasDoor,
+  MULLION,
+  opensInward,
+  sashWidths,
+  type Frame,
+} from "../model/frames";
 import { wallLayers } from "../model/wallTypes";
 import { analyzeFloor, pointInPolygon, wallSides, type FloorAnalysis } from "./plan";
 import { add, cross, dot, length, scale, sub, type Vec } from "./vec";
@@ -21,8 +32,15 @@ const leftNormal = (d: Vec): Vec => ({ x: -d.y, y: d.x });
 /* Soorten en standaardmaten                                            */
 /* ------------------------------------------------------------------ */
 
-/** Wat je in het gereedschap of paneel kiest: soort + uitvoering in één. */
-export type OpeningChoice = "single" | "double" | "sliding" | "garage" | "passage" | "window" | "slidingWindow" | "patio";
+/** De vaste soorten (zonder vakken). */
+export type BasicChoice = "single" | "double" | "sliding" | "garage" | "passage" | "window" | "slidingWindow" | "patio";
+/**
+ * Wat je in het gereedschap of paneel kiest: een vaste soort, een ingebouwd
+ * samengesteld raam ("vast-draaikiep") of een eigen soort ("eigen-…").
+ */
+export type OpeningChoice = string;
+/** Een samengesteld raam of deur dat (nog) geen soort heeft. */
+export const COMPOSED = "samengesteld";
 
 interface ChoiceInfo {
   kind: OpeningKind;
@@ -31,9 +49,11 @@ interface ChoiceInfo {
   /** Standaardbreedtes (mm), zoals in België gebruikelijk. */
   widths: number[];
   defaults: (wallKind: Wall["kind"]) => Pick<Opening, "width" | "height" | "sillHeight">;
+  /** Samengesteld: de vakken. */
+  frame?: Frame;
 }
 
-export const CHOICES: Record<OpeningChoice, ChoiceInfo> = {
+export const CHOICES: Record<BasicChoice, ChoiceInfo> = {
   single: {
     kind: "door",
     label: "Deur",
@@ -89,10 +109,46 @@ export const CHOICES: Record<OpeningChoice, ChoiceInfo> = {
   },
 };
 
-export const DOOR_CHOICES: OpeningChoice[] = ["single", "double", "sliding", "garage", "passage"];
-export const WINDOW_CHOICES: OpeningChoice[] = ["window", "slidingWindow", "patio"];
+export const DOOR_CHOICES: OpeningChoice[] = ["single", "double", "glasdeur", "deur-zijlicht", "glasdeur-vast", "voordeur", "sliding", "garage", "passage"];
+export const WINDOW_CHOICES: OpeningChoice[] = [
+  "draaikiep",
+  "vast-draaikiep",
+  "drieluik",
+  "vast",
+  "openslaand",
+  "kiep",
+  "bovenlicht",
+  "slidingWindow",
+  "patio",
+  "raamdeur",
+];
 
-export function choiceOf(o: Pick<Opening, "kind" | "variant">): OpeningChoice {
+/** Eigen soorten, bij deuren of bij ramen. */
+export function customChoices(group: "door" | "window"): OpeningChoice[] {
+  return customFrameTypes()
+    .filter((t) => hasDoor(t.frame) === (group === "door"))
+    .map((t) => t.id);
+}
+
+/** Alles over een keuze; null als ze niet (meer) bestaat. */
+export function choiceInfo(c: OpeningChoice): ChoiceInfo | null {
+  if (c in CHOICES) return CHOICES[c as BasicChoice];
+  const t = frameType(c);
+  if (!t) return null;
+  return {
+    kind: hasDoor(t.frame) ? "door" : "window",
+    label: t.name,
+    widths: t.widths ?? [...new Set([t.width, 1200, 1500, 1800, 2400])].sort((a, b) => a - b),
+    defaults: () => ({ width: t.width, height: t.height, sillHeight: t.sillHeight }),
+    frame: t.frame,
+  };
+}
+
+/** Bestaat deze keuze? (anders terugvallen op de eerste) */
+export const isChoice = (c: OpeningChoice | undefined): c is OpeningChoice => !!c && choiceInfo(c) !== null;
+
+export function choiceOf(o: Pick<Opening, "kind" | "variant" | "frame" | "frameType">): OpeningChoice {
+  if (o.frame) return o.frameType && choiceInfo(o.frameType) ? o.frameType : COMPOSED;
   if (o.kind === "passage") return "passage";
   if (o.kind === "window") return o.variant === "slidingWindow" || o.variant === "patio" ? o.variant : "window";
   return o.variant === "double" || o.variant === "sliding" || o.variant === "garage" ? o.variant : "single";
@@ -101,17 +157,38 @@ export function choiceOf(o: Pick<Opening, "kind" | "variant">): OpeningChoice {
 export const OPENING_LABEL: Record<OpeningKind, string> = { door: "Deur", window: "Raam", passage: "Doorgang" };
 
 /** Naam zoals de gebruiker hem ziet ("Schuifraam", "Dubbele deur"…). */
-export function openingName(o: Pick<Opening, "kind" | "variant">): string {
-  return CHOICES[choiceOf(o)].label;
+export function openingName(o: Pick<Opening, "kind" | "variant" | "frame" | "frameType">): string {
+  const c = choiceOf(o);
+  if (c === COMPOSED) return o.kind === "door" ? "Samengestelde deur" : "Samengesteld raam";
+  return choiceInfo(c)?.label ?? OPENING_LABEL[o.kind];
+}
+
+/** De vakken van een opening; ook voor de vaste soorten waar dat kan (om verder samen te stellen). */
+export function frameOf(o: Pick<Opening, "kind" | "variant" | "frame">): Frame | null {
+  if (o.frame) return o.frame;
+  if (o.kind === "window") {
+    if (o.variant === "slidingWindow" || o.variant === "patio") return { sashes: [{ type: "vast" }, { type: "schuif", hinge: "left" }] };
+    return { sashes: [{ type: "vast" }] };
+  }
+  if (o.kind === "door" && !o.variant) return { sashes: [{ type: "deur", hinge: "left" }] };
+  if (o.kind === "door" && o.variant === "double")
+    return { sashes: [{ type: "deur", hinge: "left" }, { type: "deur", hinge: "right" }] };
+  return null;
 }
 
 /** Soort + uitvoering + standaardmaten voor een keuze. */
 export function choiceProps(
   c: OpeningChoice,
   wallKind: Wall["kind"],
-): Pick<Opening, "kind" | "variant" | "width" | "height" | "sillHeight"> {
-  const info = CHOICES[c];
-  return { kind: info.kind, variant: info.variant, ...info.defaults(wallKind) };
+): Pick<Opening, "kind" | "variant" | "width" | "height" | "sillHeight" | "frame" | "frameType"> {
+  const info = choiceInfo(c) ?? CHOICES.window;
+  return {
+    kind: info.kind,
+    variant: info.variant,
+    ...info.defaults(wallKind),
+    frame: info.frame,
+    frameType: info.frame ? c : undefined,
+  };
 }
 
 /** Breedte van het deurkader aan elke kant (mm). */
@@ -123,7 +200,9 @@ export const DOOR_FRAME = 50;
  * het blad plus het kader aan beide kanten. Bij ramen, poorten en doorgangen
  * is `width` meteen de opening.
  */
-export function openingSpan(o: Pick<Opening, "kind" | "variant" | "width">): number {
+export function openingSpan(o: Pick<Opening, "kind" | "variant" | "width" | "frame">): number {
+  // een samengesteld kader: de breedte is meteen de hele opening
+  if (o.frame) return o.width;
   return o.kind === "door" && o.variant !== "garage" ? o.width + 2 * DOOR_FRAME : o.width;
 }
 
@@ -299,8 +378,7 @@ export function addOpening(floor: Floor, o: Omit<Opening, "id">, id: Id): Floor 
   if (!frame) return null;
   const offset = fitOffset(floor, frame, openingSpan(o), o.offset);
   if (offset === null) return null;
-  const clean: Opening = { ...o, id, offset };
-  if (clean.variant === undefined) delete clean.variant;
+  const clean = dropUndefined({ ...o, id, offset });
   return { ...floor, openings: [...floor.openings, clean] };
 }
 
@@ -308,13 +386,19 @@ export function addOpening(floor: Floor, o: Omit<Opening, "id">, id: Id): Floor 
 export function updateOpening(floor: Floor, id: Id, patch: Partial<Opening>): Floor | null {
   const cur = floor.openings.find((o) => o.id === id);
   if (!cur) return null;
-  const next: Opening = { ...cur, ...patch };
-  if (next.variant === undefined) delete next.variant;
+  const next = dropUndefined({ ...cur, ...patch });
   const frame = wallFrame(floor, next.wall);
   if (!frame) return null;
   const offset = fitOffset(floor, frame, openingSpan(next), next.offset, id);
   if (offset === null) return null;
   return { ...floor, openings: floor.openings.map((o) => (o.id === id ? { ...next, offset } : o)) };
+}
+
+/** Velden zonder waarde weglaten (bv. `frame` na het kiezen van een gewone deur). */
+function dropUndefined(o: Opening): Opening {
+  const out = { ...o } as Record<string, unknown>;
+  for (const k of Object.keys(out)) if (out[k] === undefined) delete out[k];
+  return out as unknown as Opening;
 }
 
 export function removeOpening(floor: Floor, id: Id): Floor {
@@ -361,6 +445,8 @@ export interface OpeningShape {
   dashed: [Vec, Vec][];
   /** Draaiende bladen met hun kwartcirkel. */
   leaves: Leaf[];
+  /** Draaiende raamvleugels: een dunne boog (ze botsen niet zoals een deur). */
+  sashes: Leaf[];
   center: Vec;
   /** Richting van de muur, en de normaal naar de draaikant. */
   d: Vec;
@@ -447,6 +533,7 @@ export function openingShape(floor: Floor, o: Opening): OpeningShape | null {
     thin: [],
     dashed: [],
     leaves: [],
+    sashes: [],
     center,
     d: f.d,
     out,
@@ -474,6 +561,7 @@ export function openingShape(floor: Floor, o: Opening): OpeningShape | null {
   }
 
   if (o.kind === "passage") return shape;
+  if (o.frame) return drawFrame(shape, o.frame, sec, P, t0, t1, rebate, swingDepth);
 
   if (o.kind === "window") {
     const fd = sec.frameAt;
@@ -693,11 +781,112 @@ export function roomDaylight(floor: Floor, analysis: FloorAnalysis = analyzeFloo
     const walls = new Set(r.edgeWalls);
     let glass = 0;
     for (const o of floor.openings) {
-      if (o.kind !== "window" || !walls.has(o.wall) || wallKind.get(o.wall) !== "exterior") continue;
-      glass += o.width * o.height * GLASS_FACTOR;
+      if (!walls.has(o.wall) || wallKind.get(o.wall) !== "exterior") continue;
+      // ramen, en glas in een samengestelde deur (een glazen deur of zijlicht)
+      if (o.frame) glass += o.width * o.height * GLASS_FACTOR * glassShare(o.frame, o.width);
+      else if (o.kind === "window") glass += o.width * o.height * GLASS_FACTOR;
     }
     const needed = r.area / 12;
     out.set(r.room.id, { glass, needed, ok: glass >= needed });
   }
   return out;
+}
+
+/**
+ * Een samengesteld raam of deur tekenen: buitenstijlen, tussenstijlen en per
+ * vak glas, een deurblad of een draaiende vleugel (dunne boog naar binnen).
+ */
+function drawFrame(
+  shape: OpeningShape,
+  frame: Frame,
+  sec: ReturnType<typeof section>,
+  P: (t: number, d: number) => Vec,
+  t0: number,
+  t1: number,
+  rebate: number,
+  swingDepth: number,
+): OpeningShape {
+  const o = shape.opening;
+  const T = sec.T;
+  // de binnenkant: bij een gevel altijd binnen, bij een binnenmuur de gekozen kant
+  const viewDepth = sec.exterior ? T : swingDepth;
+  const into = viewDepth === 0 ? -1 : 1;
+  const fd0 = sec.exterior ? sec.frameAt : Math.max(0, (T - FRAME_DEPTH) / 2);
+  const fd1 = fd0 + FRAME_DEPTH;
+  const faceIn = into > 0 ? fd1 : fd0;
+  const mid = (fd0 + fd1) / 2;
+  // van links naar rechts zoals je het van binnen ziet: langs de muur, of omgekeerd
+  const a0 = P(0, viewDepth);
+  const facing = sub(P(0, viewDepth - into), a0);
+  const right = { x: -facing.y, y: facing.x };
+  const ltr = dot(right, sub(P(1, viewDepth), a0)) > 0;
+  const at = (x: number) => (ltr ? t0 + x : t1 - x);
+  const span = t1 - t0;
+  const widths = sashWidths(frame, span);
+  let x = 0;
+  shape.frames.push(rect(P, t0, t0 + FRAME_STILE, fd0, fd1), rect(P, t1 - FRAME_STILE, t1, fd0, fd1));
+  widths.forEach((w, i) => {
+    const sash = frame.sashes[i];
+    const first = i === 0;
+    const last = i === widths.length - 1;
+    // vrije breedte van het vak tussen de stijlen
+    const c0 = x + (first ? FRAME_STILE : MULLION / 2);
+    const c1 = x + w - (last ? FRAME_STILE : MULLION / 2);
+    if (!last) {
+      const m0 = at(x + w - MULLION / 2);
+      const m1 = at(x + w + MULLION / 2);
+      shape.frames.push(rect(P, Math.min(m0, m1), Math.max(m0, m1), fd0, fd1));
+    }
+    const g0 = Math.min(at(c0), at(c1));
+    const g1 = Math.max(at(c0), at(c1));
+    const clear = c1 - c0;
+    // scharnierkant langs de muur (t), en de richting naar de andere kant
+    const hingeLeft = (sash.hinge ?? "left") === "left";
+    const hingeT = hingeLeft ? at(c0) : at(c1);
+    const toward: 1 | -1 = hingeT === g0 ? 1 : -1;
+    if (sash.type === "deur") {
+      const H = P(hingeT, faceIn);
+      const tip = P(hingeT, faceIn + into * clear);
+      shape.panels.push([H, tip, P(hingeT + toward * LEAF, faceIn + into * clear), P(hingeT + toward * LEAF, faceIn)]);
+      shape.leaves.push(leaf(H, unit(sub(tip, H)), P(hingeT + toward * clear, faceIn), clear));
+    } else if (sash.type === "schuif") {
+      // schuivende vleugel op een eigen rail, iets over het buurvak
+      const lap = Math.min(80, clear / 6);
+      shape.frames.push(rect(P, g0 - lap, g1 + lap, fd0 + 40, fd0 + 64));
+      shape.glass.push([P(g0 - lap, fd0 + 52), P(g1 + lap, fd0 + 52)]);
+    } else {
+      // dubbel glas
+      shape.glass.push([P(g0, mid - 10), P(g1, mid - 10)], [P(g0, mid + 10), P(g1, mid + 10)]);
+      if (opensInward(sash.type)) {
+        const H = P(hingeT, faceIn);
+        const tip = P(hingeT, faceIn + into * clear);
+        shape.thin.push([H, tip]);
+        shape.sashes.push(leaf(H, unit(sub(tip, H)), P(hingeT + toward * clear, faceIn), clear));
+      }
+    }
+    x += w;
+  });
+  if (sec.exterior) {
+    const a = t0 + rebate;
+    const b = t1 - rebate;
+    shape.thin.push([P(a, -SILL_OUT), P(b, -SILL_OUT)], [P(a, -SILL_OUT), P(a, 0)], [P(b, -SILL_OUT), P(b, 0)]);
+    if (o.kind === "window" && o.sillHeight > 0)
+      shape.thin.push(
+        [P(t0 - 20, T + BENCH_IN), P(t1 + 20, T + BENCH_IN)],
+        [P(t0 - 20, T), P(t0 - 20, T + BENCH_IN)],
+        [P(t1 + 20, T), P(t1 + 20, T + BENCH_IN)],
+      );
+  }
+  return shape;
+}
+
+/** Om een keuze als klein vooraanzicht te tonen; null voor een poort of doorgang. */
+export function choicePreview(c: OpeningChoice): { frame: Frame; width: number; height: number } | null {
+  const info = choiceInfo(c);
+  if (!info) return null;
+  const { width, height } = info.defaults("interior");
+  if (info.frame) return { frame: info.frame, width, height };
+  if (c === "sliding") return { frame: { sashes: [{ type: "schuif", hinge: "left" }] }, width: 930, height: 2100 };
+  const f = frameOf({ kind: info.kind, variant: info.variant });
+  return f ? { frame: f, width: info.kind === "door" ? width + 2 * DOOR_FRAME : width, height } : null;
 }

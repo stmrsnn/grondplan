@@ -17,6 +17,7 @@
  */
 export const SCHEMA_VERSION = 4;
 
+import type { Frame, FrameType } from "./frames";
 import type { WallType } from "./wallTypes";
 
 export type Id = string;
@@ -63,6 +64,8 @@ export interface ProjectSettings {
   northAngle: number;
   /** Zelf samengestelde muurtypes (id begint met "eigen-"). */
   customWallTypes?: WallType[];
+  /** Zelf samengestelde ramen en deuren. */
+  customFrameTypes?: FrameType[];
 }
 
 export interface Floor {
@@ -153,6 +156,10 @@ export interface Opening {
   variant?: OpeningVariant;
   /** Deuren: aan welke kant van de muur draait het blad, en waar zitten de scharnieren. */
   swing?: { side: "left" | "right"; hinge: "start" | "end" };
+  /** Samengesteld raam of deur: de vakken (vast, draaikiep, deur…). */
+  frame?: Frame;
+  /** Welke soort (ingebouwd of eigen), voor de naam en het terugvinden. */
+  frameType?: string;
 }
 
 export interface Room {
