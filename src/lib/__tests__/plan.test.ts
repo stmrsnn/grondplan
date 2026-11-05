@@ -494,3 +494,33 @@ describe("eigen muurtypes", () => {
     setCustomWallTypes([]);
   });
 });
+
+describe("aansluiting van muren met verschillende diktes", () => {
+  it("15 cm die overgaat in 10 cm, met een muur erop: rechte kamerwanden en geen gaatjes", async () => {
+    const { addPolyline, addRectangle, analyzeFloor, pointInPolygon } = await import("../geometry/plan");
+    let k = 0;
+    const id = () => `j${k++}`;
+    const P = (thickness: number) => ({ thickness, height: 2600, kind: "interior" as const, loadBearing: false });
+    let f = { id: "f", name: "G", elevation: 0, height: 2600, nodes: [], walls: [], rooms: [], openings: [], items: [] } as unknown as Floor;
+    f = addRectangle(f, { x: 0, y: -2000 }, { x: 6000, y: 2000 }, { ...P(200), kind: "exterior" }, id);
+    f = addPolyline(f, [{ x: 0, y: 0 }, { x: 3000, y: 0 }], P(150), id);
+    f = addPolyline(f, [{ x: 3000, y: 0 }, { x: 6000, y: 0 }], P(100), id);
+    f = addPolyline(f, [{ x: 3000, y: -2000 }, { x: 3000, y: 0 }], P(100), id);
+    const a = analyzeFloor(f);
+    expect(a.rooms).toHaveLength(3);
+    // elke kamerwand loopt horizontaal of verticaal (geen schuine stukken)
+    for (const r of a.rooms)
+      r.inner.forEach((p, i) => {
+        const q = r.inner[(i + 1) % r.inner.length];
+        expect(Math.abs(q.x - p.x) < 0.5 || Math.abs(q.y - p.y) < 0.5).toBe(true);
+      });
+    // rond het knooppunt is elk punt ofwel kamer, ofwel muur
+    const walls = [...a.wallPolys.values()];
+    for (let x = 2860; x <= 3140; x += 7)
+      for (let y = -140; y <= 140; y += 7) {
+        const p = { x: x + 0.3, y: y + 0.3 };
+        const covered = a.rooms.some((r) => pointInPolygon(p, r.inner)) || walls.some((w) => pointInPolygon(p, w));
+        expect(covered, `gat op ${x},${y}`).toBe(true);
+      }
+  });
+});

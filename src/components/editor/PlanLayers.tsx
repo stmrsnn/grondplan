@@ -117,7 +117,7 @@ export const FloorLayer = memo(function FloorLayer({
     return {
       walls: [...analysis.wallPolys.values()].map(path).join(""),
       byMaterial: [...byMaterial.entries()],
-      lines: analysis.layerLines.map(([a, b]) => `M${a.x} ${a.y}L${b.x} ${b.y}`).join(""),
+      lines: [...analysis.layerLines, ...analysis.joints].map(([a, b]) => `M${a.x} ${a.y}L${b.x} ${b.y}`).join(""),
       hard: analysis.insulation.filter((i) => !i.soft).map((i) => `M${i.pts.map((p) => `${p.x} ${p.y}`).join("L")}`).join(""),
       soft: analysis.insulation.filter((i) => i.soft).map((i) => wave(i.pts)).join(""),
       outline: [

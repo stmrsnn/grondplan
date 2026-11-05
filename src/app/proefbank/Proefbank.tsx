@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import type { EditorBackend } from "@/components/editor/backend";
 import { Editor } from "@/components/editor/Editor";
 import { SaveConflict } from "@/lib/editor/autosave";
-import { addPolyline } from "@/lib/geometry/plan";
+import { addPolyline, addRectangle } from "@/lib/geometry/plan";
 import { createDoc } from "@/lib/model/doc";
 import type { ProjectDoc } from "@/lib/model/types";
 
@@ -26,6 +26,15 @@ export function Proefbank() {
       const p = { thickness: 150, height: 2600, kind: "interior" as const, loadBearing: false };
       for (let i = 0; i <= 15; i++) f = addPolyline(f, [{ x: i * 3000, y: 0 }, { x: i * 3000, y: 30000 }], p);
       for (let j = 0; j <= 10; j++) f = addPolyline(f, [{ x: 0, y: j * 3000 }, { x: 45000, y: j * 3000 }], p);
+      d = { ...d, floors: [f] };
+    }
+    if (q.get("sprong")) {
+      // aansluiting: binnenmuur van 15 cm die overgaat in 10 cm, met een muur van 10 cm erop
+      const ip = (thickness: number, type: string) => ({ thickness, height: 2600, kind: "interior" as const, loadBearing: false, type });
+      let f = addRectangle(d.floors[0], { x: -190, y: -2190 }, { x: 6190, y: 2190 }, { thickness: 380, height: 2600, kind: "exterior", loadBearing: true, type: "spouw-38" });
+      f = addPolyline(f, [{ x: -190, y: 0 }, { x: 3000, y: 0 }], ip(140, "binnen-14"));
+      f = addPolyline(f, [{ x: 3000, y: 0 }, { x: 6190, y: 0 }], ip(100, "binnen-10"));
+      f = addPolyline(f, [{ x: 3000, y: -2190 }, { x: 3000, y: 0 }], ip(100, "binnen-10"));
       d = { ...d, floors: [f] };
     }
     // eslint-disable-next-line react-hooks/set-state-in-effect -- nieuwe id's enkel in de browser

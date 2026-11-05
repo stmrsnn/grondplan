@@ -315,20 +315,37 @@ export function innerPolygon(face: Face): { points: Vec[]; walls: Id[] } {
     return { p: add(e.from, scale(nrm, leftExtent(e.wall, e.from.id))), d, nrm, e };
   });
   const points: Vec[] = [];
+  const walls: Id[] = [];
   for (let i = 0; i < n; i++) {
     const prev = lines[(i - 1 + n) % n];
     const cur = lines[i];
     const hit = lineIntersection(prev.p, prev.d, cur.p, cur.d);
-    points.push(hit ?? cur.p);
+    if (hit) {
+      points.push(hit);
+    } else {
+      // rechtdoor naar een muur van een andere dikte: het muurvlak maakt een sprong
+      const step = dot(sub(cur.p, prev.p), prev.nrm);
+      if (Math.abs(step) > 0.5) {
+        points.push(add(cur.e.from, scale(prev.nrm, leftExtent(prev.e.wall, prev.e.from.id))));
+        walls.push(cur.e.wall.id);
+      }
+      points.push(cur.p);
+    }
+    walls.push(cur.e.wall.id);
   }
-  return { points, walls: face.edges.map((e) => e.wall.id) };
+  return { points, walls };
 }
 
 /**
  * Omtrek van elke muur als veelhoek, met verstek waar muren samenkomen.
  * Bij heel scherpe hoeken valt hij terug op een rechte afsluiting.
  */
-export function wallPolygons(g: Graph, cornerPairs?: Map<Id, [Id, Id]>): Map<Id, Vec[]> {
+export function wallPolygons(
+  g: Graph,
+  cornerPairs?: Map<Id, [Id, Id]>,
+  /** Vult (optioneel) de voeglijnen: waar twee verschillende muren tegen elkaar komen. */
+  joints?: [Vec, Vec][],
+): Map<Id, Vec[]> {
   const byId = new Map(g.nodes.map((n) => [n.id, n]));
   // hL/hR: hoe ver de muur links/rechts reikt, uitgaand vanaf het knooppunt bekeken
   type End = { wall: Wall; d: Vec; hL: number; hR: number; angle: number };
@@ -344,7 +361,8 @@ export function wallPolygons(g: Graph, cornerPairs?: Map<Id, [Id, Id]>): Map<Id,
     (ends.get(b.id) ?? ends.set(b.id, []).get(b.id)!).push({ wall: w, d: nd, hL: s.right, hR: s.left, angle: Math.atan2(nd.y, nd.x) });
   }
   // per knooppunt en muur: hoek links (L) en rechts (R) van de muur, uitgaand bekeken
-  const corners = new Map<string, { L: Vec; R: Vec }>();
+  // `mid`: extra punten van R naar L als het uiteinde een sprong maakt
+  const corners = new Map<string, { L: Vec; R: Vec; mid?: Vec[] }>();
   for (const [nodeId, list] of ends) {
     const p = byId.get(nodeId)!;
     list.sort((x, y) => x.angle - y.angle);
@@ -364,8 +382,12 @@ export function wallPolygons(g: Graph, cornerPairs?: Map<Id, [Id, Id]>): Map<Id,
         if (hitR && length(sub(hitR, p)) <= lim) R = hitR;
       };
       const parallel = (o: End) => Math.abs(cross(o.d, e.d)) < 1e-6;
+      const sameKind = (o: End) => o.wall.type === e.wall.type && o.wall.thickness === e.wall.thickness;
       if (k === 2) {
-        miter(list[(i + 1) % k]);
+        const other = list[(i + 1) % k];
+        miter(other);
+        // andere opbouw: een voeg op de aansluiting (bij een verstek of een rechte overgang)
+        if (joints && !sameKind(other)) joints.push([R, L]);
       } else if (k > 2) {
         // Aansluiting van drie of meer muren, zoals een architect ze tekent:
         // twee muren lopen door (de gevelhoek, of de rechtdoorgaande muur) en de
@@ -390,14 +412,29 @@ export function wallPolygons(g: Graph, cornerPairs?: Map<Id, [Id, Id]>): Map<Id,
           if (pair.includes(e)) {
             const other = pair[0] === e ? pair[1] : pair[0];
             if (!parallel(other)) miter(other);
+            if (joints && !sameKind(other)) joints.push([R, L]);
           } else {
-            // stoppen tegen het vlak van de doorlopende muren
-            const reach = pair
-              .filter((o) => !parallel(o))
-              .map((o) => (dot(leftNormal(o.d), e.d) > 0 ? o.hL : o.hR));
-            const stop = reach.length ? Math.max(...reach) : 0;
-            L = add(L, scale(e.d, stop));
-            R = add(R, scale(e.d, stop));
+            // stoppen tegen het vlak van de doorlopende muren, aan elke kant tegen
+            // de muur die daar ligt (die kunnen verschillend dik zijn)
+            const reachOf = (o: End) => (dot(leftNormal(o.d), e.d) > 0 ? o.hL : o.hR);
+            const l = leftNormal(e.d);
+            const onLeft = pair.find((o) => dot(o.d, l) > 1e-6);
+            const onRight = pair.find((o) => dot(o.d, l) < -1e-6);
+            const all = pair.filter((o) => !parallel(o)).map(reachOf);
+            const fallback = all.length ? Math.max(...all) : 0;
+            const stopL = onLeft ? reachOf(onLeft) : fallback;
+            const stopR = onRight ? reachOf(onRight) : fallback;
+            L = add(L, scale(e.d, stopL));
+            R = add(R, scale(e.d, stopR));
+            // de aansluitende muur stopt tegen het vlak: daar komt een voeg
+            const sameAsPair = pair.every(sameKind);
+            if (Math.abs(stopL - stopR) > 0.5) {
+              const mid = [add(p, scale(e.d, stopR)), add(p, scale(e.d, stopL))];
+              if (joints && !sameAsPair) joints.push([R, mid[0]], [mid[0], mid[1]], [mid[1], L]);
+              corners.set(`${nodeId}|${e.wall.id}`, { L, R, mid });
+              continue;
+            }
+            if (joints && !sameAsPair) joints.push([R, L]);
           }
         } else {
           // geen duidelijke doorlopende muur (Y-vorm): tot de verste rand van de andere
@@ -416,7 +453,7 @@ export function wallPolygons(g: Graph, cornerPairs?: Map<Id, [Id, Id]>): Map<Id,
     const A = corners.get(`${w.start}|${w.id}`);
     const B = corners.get(`${w.end}|${w.id}`);
     if (!A || !B) continue;
-    polys.set(w.id, [A.L, B.R, B.L, A.R]);
+    polys.set(w.id, [A.L, B.R, ...(B.mid ?? []), B.L, A.R, ...(A.mid ?? [])]);
   }
   return polys;
 }
@@ -649,6 +686,8 @@ export interface FloorAnalysis {
   layers: LayerShape[];
   /** Grenslijnen tussen lagen. */
   layerLines: [Vec, Vec][];
+  /** Voegen waar verschillende muren tegen elkaar komen. */
+  joints: [Vec, Vec][];
   /** Isolatiesymbool (zigzag of golf) per isolatielaag. */
   insulation: { pts: Vec[]; soft: boolean }[];
 }
@@ -752,7 +791,8 @@ function computeAnalysis(floor: Floor): FloorAnalysis {
       wallOutside.set(e.wall.id, e.from.id === e.wall.start ? 1 : -1);
     });
   }
-  const wallPolys = wallPolygons(g, cornerPairs);
+  const joints: [Vec, Vec][] = [];
+  const wallPolys = wallPolygons(g, cornerPairs, joints);
   const { layers, layerLines, insulation } = wallLayerShapes(floor, wallPolys, wallOutside);
   let outerBounds: FloorAnalysis["outerBounds"] = null;
   for (const poly of wallPolys.values()) {
@@ -780,6 +820,7 @@ function computeAnalysis(floor: Floor): FloorAnalysis {
     wallOutside,
     layers,
     layerLines,
+    joints,
     insulation,
   };
 }
@@ -798,28 +839,23 @@ function clipHalf(poly: Vec[], n: Vec, c: number): Vec[] {
   return out;
 }
 
-/** Stuk van de lijn p + t·d dat binnen een (bolle) veelhoek valt, als [t0, t1]. */
+/** Stuk van de lijn p + t·d tussen de eerste en laatste snijding met de veelhoek, als [t0, t1]. */
 function lineInPolygon(poly: Vec[], p: Vec, d: Vec): [number, number] | null {
-  let t0 = -Infinity;
-  let t1 = Infinity;
-  const sgn = signedArea(poly) >= 0 ? 1 : -1;
+  const ts: number[] = [];
+  const n = leftNormal(d);
   for (let i = 0; i < poly.length; i++) {
     const a = poly[i];
     const b = poly[(i + 1) % poly.length];
-    const e = sub(b, a);
-    if (length(e) < 1e-9) continue;
-    // binnen = links van de rand (bij positieve oriëntatie)
-    const nIn = scale(leftNormal(e), sgn);
-    const num = dot(sub(p, a), nIn);
-    const den = dot(d, nIn);
-    if (Math.abs(den) < 1e-12) {
-      if (num < 0) return null;
-      continue;
-    }
-    const t = -num / den;
-    if (den > 0) t0 = Math.max(t0, t);
-    else t1 = Math.min(t1, t);
+    const sa = dot(sub(a, p), n);
+    const sb = dot(sub(b, p), n);
+    if ((sa > 0) === (sb > 0) && sa !== 0 && sb !== 0) continue;
+    if (Math.abs(sa - sb) < 1e-12) continue; // evenwijdig op de lijn
+    const q = add(a, scale(sub(b, a), sa / (sa - sb)));
+    ts.push(dot(sub(q, p), d));
   }
+  if (ts.length < 2) return null;
+  const t0 = Math.min(...ts);
+  const t1 = Math.max(...ts);
   return t1 - t0 > 1 ? [t0, t1] : null;
 }
 
