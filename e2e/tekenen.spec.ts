@@ -355,3 +355,19 @@ test("eigen muurtype maken vanuit een muur en later dikker maken", async ({ page
   await dlg2.getByRole("button", { name: "Bewaren" }).click();
   await expect(page.locator("aside ul li").first()).toContainText("20,0 m²");
 });
+
+test("een dunnere muur rechtdoor: kiezen welk vlak doorloopt", async ({ page }) => {
+  await page.goto("/proefbank?sprong=1");
+  await page.keyboard.press("0");
+  const r = (await page.locator("svg[role=application] [data-walls]").boundingBox())!;
+  const k = r.width / 6760;
+  // de muur van 10 cm rechts van de aansluiting
+  await page.mouse.click(r.x + 4690 * k, r.y + 2380 * k);
+  const group = page.getByRole("group", { name: "Uitlijning" });
+  await expect(page.getByText(/beide vlakken verspringen/)).toBeVisible();
+  await group.getByRole("button", { name: "Onder" }).click();
+  await expect(group.getByRole("button", { name: "Onder" })).toHaveAttribute("aria-pressed", "true");
+  await expect(page.getByText(/beide vlakken verspringen/)).toBeHidden();
+  await page.keyboard.press("Control+z");
+  await expect(group.getByRole("button", { name: "Geen (midden)" })).toHaveAttribute("aria-pressed", "true");
+});

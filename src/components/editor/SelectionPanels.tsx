@@ -22,6 +22,7 @@ import { W } from "@/lib/words";
 import { LengthField } from "./LengthField";
 import { LayerStack, WallTypeSelect } from "./WallTypeSelect";
 import { typeForThickness, typeThickness, wallLayers, wallType } from "@/lib/model/wallTypes";
+import { alignWall, wallAlignment } from "@/lib/geometry/plan";
 import {
   CHOICES,
   choiceOf,
@@ -297,11 +298,15 @@ function WallPanel({
   const wall = floor.walls.find((w) => w.id === wallId);
   const sides = analysis.rooms
     .map((r) => {
-      const i = r.edgeWalls.indexOf(wallId);
-      if (i < 0) return null;
-      const p = r.inner[i];
-      const q = r.inner[(i + 1) % r.inner.length];
-      return { id: r.room.id, name: r.room.name, len: Math.hypot(q.x - p.x, q.y - p.y) };
+      // de langste zijde van deze muur in de kamer (niet een sprongetje in het vlak)
+      let len = 0;
+      r.edgeWalls.forEach((w, i) => {
+        if (w !== wallId) return;
+        const p = r.inner[i];
+        const q = r.inner[(i + 1) % r.inner.length];
+        len = Math.max(len, Math.hypot(q.x - p.x, q.y - p.y));
+      });
+      return len > 0 ? { id: r.room.id, name: r.room.name, len } : null;
     })
     .filter((x): x is { id: string; name: string; len: number } => x !== null);
   const [anchor, setAnchor] = useState<string>(sides[0]?.id ?? "");
@@ -327,6 +332,20 @@ function WallPanel({
     commit(editFloor(floor, after, `${what} aangepast`, `Muur: vorige ${what.toLowerCase()} teruggezet`, `Muur: ${what.toLowerCase()} opnieuw toegepast`));
   };
   const type = wallType(wall.type);
+  const al = wallAlignment(floor, wall.id);
+  const horizontal = a && b ? Math.abs(b.x - a.x) >= Math.abs(b.y - a.y) : true;
+  // woorden voor de linker- en rechterkant van de muur, zoals je het plan bekijkt
+  const word = (n: { x: number; y: number }) => (horizontal ? (n.y < 0 ? "Boven" : "Onder") : n.x < 0 ? "Links" : "Rechts");
+  const alignSides = al
+    ? ([
+        { side: "left" as const, label: word(al.n), on: al.left },
+        { side: "right" as const, label: word({ x: -al.n.x, y: -al.n.y }), on: al.right },
+      ].sort((p, q) => (["Boven", "Links"].includes(p.label) ? -1 : ["Boven", "Links"].includes(q.label) ? 1 : 0)))
+    : [];
+  const align = (side: "left" | "right" | "center", what: string) => {
+    const after = alignWall(floor, wall.id, side);
+    if (after !== floor) commit(editFloor(floor, after, what, "Muur: vorige uitlijning teruggezet", `${what} (opnieuw)`));
+  };
 
   return (
     <section className="flex flex-col gap-4">
@@ -353,6 +372,31 @@ function WallPanel({
         }}
       />
       <LayerStack layers={wallLayers(wall)} />
+      {al && al.left !== null && (
+        <div className="flex flex-col gap-1.5">
+          <span className="text-[13px] font-medium text-ink-2">Welk vlak loopt door met de muur ernaast?</span>
+          {al.left === false && al.right === false && (
+            <p className="text-[12px] leading-relaxed text-ink-3">
+              Deze muur is anders dik dan de muur die er rechtdoor op aansluit, en beide vlakken verspringen. Kies
+              welk vlak moet doorlopen.
+            </p>
+          )}
+          <div className="flex rounded-[var(--radius-control)] bg-surface-2 p-0.5 text-[13px]" role="group" aria-label="Uitlijning">
+            {[alignSides[0], { side: "center" as const, label: "Geen (midden)", on: al.centered && !al.left && !al.right }, alignSides[1]].map((o) => (
+              <button
+                key={o.side}
+                type="button"
+                aria-pressed={!!o.on}
+                title={o.side === "center" ? "De muur ligt gecentreerd op zijn lijn" : `Het ${o.label.toLowerCase()}vlak loopt door`}
+                onClick={() => align(o.side, o.side === "center" ? "Muur gecentreerd" : `Muur: ${o.label.toLowerCase()}vlak loopt door`)}
+                className={`h-8 flex-1 rounded-[6px] px-2 ${o.on ? "border border-line bg-bg font-medium text-ink" : "text-ink-3 hover:text-ink"}`}
+              >
+                {o.label}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
       <LengthField
         label="Totale dikte"
         value={wall.thickness}

@@ -524,3 +524,52 @@ describe("aansluiting van muren met verschillende diktes", () => {
       }
   });
 });
+
+describe("muren uitlijnen", () => {
+  it("een dunne muur rechtdoor naast een dikke: onderkant gelijk geeft een doorlopende wand", async () => {
+    const { addPolyline, addRectangle, alignWall, analyzeFloor, wallAlignment } = await import("../geometry/plan");
+    let k = 0;
+    const id = () => `u${k++}`;
+    const P = (thickness: number) => ({ thickness, height: 2600, kind: "interior" as const, loadBearing: false });
+    let f = { id: "f", name: "G", elevation: 0, height: 2600, nodes: [], walls: [], rooms: [], openings: [], items: [] } as unknown as Floor;
+    f = addRectangle(f, { x: 0, y: -2000 }, { x: 6000, y: 2000 }, { ...P(200), kind: "exterior" }, id);
+    f = addPolyline(f, [{ x: 0, y: 0 }, { x: 3000, y: 0 }], P(100), id);
+    f = addPolyline(f, [{ x: 3000, y: 0 }, { x: 6000, y: 0 }], P(150), id);
+    const thin = f.walls.find((w) => w.thickness === 100)!;
+    const al = wallAlignment(f, thin.id)!;
+    expect(al.left).toBe(false);
+    expect(al.right).toBe(false);
+    // de onderkant (y groter) is de kant waar de normaal naar beneden wijst
+    const bottom = al.n.y > 0 ? "left" : "right";
+    const g = alignWall(f, thin.id, bottom, id);
+    expect(wallAlignment(g, thin.id)![bottom]).toBe(true);
+    // de kamer onderaan heeft nu een rechte bovenwand: alle punten bovenaan op dezelfde hoogte
+    const below = analyzeFloor(g).rooms.find((r) => r.center.y > 0)!;
+    const top = below.inner.filter((p) => p.y < 1000).map((p) => Math.round(p.y));
+    expect(new Set(top).size).toBe(1);
+    expect(top[0]).toBe(75);
+    // terug naar het midden
+    const h = alignWall(g, thin.id, "center", id);
+    expect(h.walls.find((w) => w.id === thin.id)!.offset ?? 0).toBe(0);
+  });
+});
+
+describe("vanzelf uitlijnen bij het tekenen", () => {
+  it("een dunne muur rechtdoor op een dikke, met een dwarsmuur boven: de onderkant loopt door", async () => {
+    const { addPolyline, addRectangle, autoAlignNewWalls, wallAlignment } = await import("../geometry/plan");
+    let k = 0;
+    const id = () => `v${k++}`;
+    const P = (thickness: number) => ({ thickness, height: 2600, kind: "interior" as const, loadBearing: false });
+    let f = { id: "f", name: "G", elevation: 0, height: 2600, nodes: [], walls: [], rooms: [], openings: [], items: [] } as unknown as Floor;
+    f = addRectangle(f, { x: 0, y: -2000 }, { x: 6000, y: 2000 }, { ...P(200), kind: "exterior" }, id);
+    f = addPolyline(f, [{ x: 3000, y: 0 }, { x: 6000, y: 0 }], P(150), id);
+    f = addPolyline(f, [{ x: 3000, y: -2000 }, { x: 3000, y: 0 }], P(100), id);
+    const before = f;
+    const drawn = addPolyline(f, [{ x: 0, y: 0 }, { x: 3000, y: 0 }], P(100), id);
+    const g = autoAlignNewWalls(drawn, before, id);
+    const thin = g.walls.find((w) => w.thickness === 100 && g.nodes.find((n) => n.id === w.start)!.y === 0 && g.nodes.find((n) => n.id === w.end)!.y === 0)!;
+    const al = wallAlignment(g, thin.id)!;
+    const bottomIsLeft = al.n.y > 0;
+    expect(bottomIsLeft ? al.left : al.right).toBe(true);
+  });
+});

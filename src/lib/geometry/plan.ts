@@ -1168,6 +1168,121 @@ export function roomFits(floor: Floor, a: Vec, b: Vec, t: number): boolean {
 }
 
 /**
+ * Uitlijning van een muur t.o.v. de muren die rechtdoor op hem aansluiten.
+ * Per kant: ligt het vlak in het verlengde van dat van de buur? En wat zou
+ * de muur moeten verschuiven om het wel te doen?
+ */
+export interface WallAlignment {
+  /** Normaal naar de linkerkant van de muur (start → einde). */
+  n: Vec;
+  /** Gelijk met de buur aan die kant (null = geen buur rechtdoor). */
+  left: boolean | null;
+  right: boolean | null;
+  centered: boolean;
+}
+
+function straightNeighbours(floor: Floor, w: Wall): { o: Wall; a: Vec; b: Vec }[] {
+  const byId = new Map(floor.nodes.map((n) => [n.id, n]));
+  const a = byId.get(w.start)!;
+  const b = byId.get(w.end)!;
+  const d = unit(sub(b, a));
+  const out: { o: Wall; a: Vec; b: Vec }[] = [];
+  for (const o of floor.walls) {
+    if (o.id === w.id) continue;
+    if (o.start !== w.start && o.end !== w.start && o.start !== w.end && o.end !== w.end) continue;
+    const oa = byId.get(o.start);
+    const ob = byId.get(o.end);
+    if (!oa || !ob) continue;
+    if (Math.abs(cross(unit(sub(ob, oa)), d)) > 1e-6) continue;
+    out.push({ o, a: oa, b: ob });
+  }
+  return out;
+}
+
+export function wallAlignment(floor: Floor, wallId: Id): WallAlignment | null {
+  const w = floor.walls.find((x) => x.id === wallId);
+  if (!w) return null;
+  const byId = new Map(floor.nodes.map((n) => [n.id, n]));
+  const a = byId.get(w.start);
+  const b = byId.get(w.end);
+  if (!a || !b) return null;
+  const n = leftNormal(unit(sub(b, a)));
+  const nb = straightNeighbours(floor, w);
+  const side = (v: Vec) => {
+    if (!nb.length) return null;
+    const mine = extentToward(w, a, b, v);
+    return nb.every(({ o, a: oa, b: ob }) => Math.abs(extentToward(o, oa, ob, v) - mine) < 1);
+  };
+  return { n, left: side(n), right: side(scale(n, -1)), centered: !(w.offset ?? 0) };
+}
+
+/**
+ * Lijnt een muur uit: het vlak aan de gekozen kant komt in het verlengde van
+ * de muur die er rechtdoor op aansluit ("center": gewoon gecentreerd op de lijn).
+ */
+export function alignWall(floor: Floor, wallId: Id, side: "left" | "right" | "center", newId: IdGen = defaultId): Floor {
+  const w = floor.walls.find((x) => x.id === wallId);
+  if (!w) return floor;
+  const byId = new Map(floor.nodes.map((n) => [n.id, n]));
+  const a = byId.get(w.start)!;
+  const b = byId.get(w.end)!;
+  let next: Wall;
+  if (side === "center") {
+    const { offset: _o, ...rest } = w;
+    void _o;
+    next = rest;
+  } else {
+    const n = leftNormal(unit(sub(b, a)));
+    const v = side === "left" ? n : scale(n, -1);
+    const nb = straightNeighbours(floor, w);
+    if (!nb.length) return floor;
+    // bij twee buren met een ander vlak: de dikste geeft de lijn aan
+    const ref = nb.reduce((p, q) => (q.o.thickness > p.o.thickness ? q : p));
+    next = withExtentToward(w, a, b, v, extentToward(ref.o, ref.a, ref.b, v));
+  }
+  if ((next.offset ?? 0) === (w.offset ?? 0)) return floor;
+  return rebuildFloor({ ...floor, walls: floor.walls.map((x) => (x.id === w.id ? next : x)) }, newId, floor);
+}
+
+/**
+ * Nieuwe muren die rechtdoor aansluiten op een muur van een andere dikte,
+ * vanzelf uitlijnen: het vlak loopt door aan de kant waar géén dwarsmuur
+ * aansluit (aan de andere kant valt de sprong weg achter die dwarsmuur).
+ */
+export function autoAlignNewWalls(floor: Floor, before: Floor, newId: IdGen = defaultId): Floor {
+  const old = new Set(before.walls.map((w) => w.id));
+  const byId = new Map(floor.nodes.map((n) => [n.id, n]));
+  let out = floor;
+  for (const w of floor.walls) {
+    if (old.has(w.id) || w.offset) continue;
+    const nb = straightNeighbours(floor, w).filter(({ o }) => o.thickness !== w.thickness);
+    if (!nb.length) continue;
+    const a = byId.get(w.start)!;
+    const b = byId.get(w.end)!;
+    const n = leftNormal(unit(sub(b, a)));
+    // dwarsmuren op de knooppunten waar de dikkere buur aansluit
+    let left = false;
+    let right = false;
+    for (const { o } of nb) {
+      const node = o.start === w.start || o.end === w.start ? w.start : w.end;
+      const p = byId.get(node)!;
+      for (const x of floor.walls) {
+        if (x.id === w.id || x.id === o.id || (x.start !== node && x.end !== node)) continue;
+        const q = byId.get(x.start === node ? x.end : x.start);
+        if (!q) continue;
+        const d = unit(sub(q, p));
+        if (Math.abs(cross(d, n)) > 0.999) continue; // rechtdoor, geen dwarsmuur
+        if (dot(d, n) > 0) left = true;
+        else right = true;
+      }
+    }
+    if (left === right) continue;
+    out = alignWall(out, w.id, left ? "right" : "left", newId);
+  }
+  return out;
+}
+
+/**
  * Een rechthoekige kamer plaatsen met binnenmaten zoals getekend of getypt.
  * Zijden die op een bestaande muur vallen, delen die muur: een buitenmuur wordt
  * dan een binnenmuur die enkel aan de kant van de nieuwe kamer dunner wordt.

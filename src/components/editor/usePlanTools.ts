@@ -7,6 +7,7 @@ import type { Viewport } from "@/lib/editor/viewport";
 import { formatMeters, parseLength } from "@/lib/format";
 import {
   addPolyline,
+  autoAlignNewWalls,
   analyzeFloor,
   moveNodes,
   ownWalls,
@@ -221,7 +222,8 @@ export function usePlanTools({ store, doc, floor, view, selection, setSelection,
       }
       const from = pts[pts.length - 1];
       if (distance(from, to) < 10) return false;
-      const after = addPolyline(floor, [from, to], wallProps(effectiveWall));
+      const drawn = addPolyline(floor, [from, to], wallProps(effectiveWall));
+      const after = autoAlignNewWalls(drawn, floor);
       commit(after, "Muur getekend", "Muur weer weggehaald", "Muur terug getekend");
       pts.push(to);
       // tegen een bestaande hoek of muur, of terug bij het begin: ketting klaar
