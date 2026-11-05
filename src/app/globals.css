@@ -181,3 +181,18 @@ dialog::backdrop {
 .tabular {
   font-variant-numeric: tabular-nums;
 }
+
+/* onderlegger: het wit van het papier valt weg, lijnen blijven zichtbaar */
+.plan-underlay {
+  mix-blend-mode: multiply;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .plan-underlay {
+    filter: invert(1) hue-rotate(180deg);
+    mix-blend-mode: screen;
+  }
+}
+:root[data-theme="dark"] .plan-underlay {
+  filter: invert(1) hue-rotate(180deg);
+  mix-blend-mode: screen;
+}

@@ -10,6 +10,7 @@ import {
   loadVersion,
   saveProject,
 } from "@/lib/projects";
+import { underlayUrl, uploadUnderlay } from "@/lib/underlays";
 import type { EditorBackend } from "./backend";
 import { Editor } from "./Editor";
 
@@ -72,6 +73,8 @@ export function ProjectEditor({
         return migrateDoc(await loadVersion(versionId));
       },
       addVersion: (doc, label) => addVersion(id, doc, label),
+      uploadUnderlay: (blob) => uploadUnderlay(id, blob),
+      underlayUrl: (src) => underlayUrl(src),
     }),
     [id, initialDoc],
   );

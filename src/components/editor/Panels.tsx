@@ -1,13 +1,14 @@
 "use client";
 
-import { memo } from "react";
-import { ArrowDown, ArrowLeft, ArrowUp, PanelRightClose, RotateCcw, RotateCw, Trash2 } from "lucide-react";
+import { memo, useState } from "react";
+import { ArrowDown, ArrowLeft, ArrowUp, ImagePlus, Move, PanelRightClose, RotateCcw, RotateCw, Ruler, Trash2 } from "lucide-react";
 import { Button, IconButton } from "@/components/ui/Button";
 import { Field, Toggle } from "@/components/ui/Field";
 import { TermHelp } from "@/components/ui/Help";
 import type { EditorStore } from "@/lib/editor/store";
 import {
   addFloor,
+  editFloor,
   removeFloor,
   setNorth,
   setSnap,
@@ -15,7 +16,7 @@ import {
   updateFloor,
 } from "@/lib/model/commands";
 import type { FloorAnalysis } from "@/lib/geometry/plan";
-import type { ProjectDoc } from "@/lib/model/types";
+import type { Floor, ProjectDoc, Underlay } from "@/lib/model/types";
 import type { Selection } from "./PlanLayers";
 import { Overview, SelectionPanel } from "./SelectionPanels";
 import { W } from "@/lib/words";
@@ -55,6 +56,9 @@ export const PropertiesPanel = memo(function PropertiesPanel({
   setSelection,
   analysis,
   onDelete,
+  underlayMode,
+  onUnderlayOpen,
+  onUnderlayMode,
 }: {
   store: EditorStore;
   doc: ProjectDoc;
@@ -65,6 +69,9 @@ export const PropertiesPanel = memo(function PropertiesPanel({
   setSelection: (s: Selection) => void;
   analysis: FloorAnalysis;
   onDelete: () => void;
+  underlayMode: UnderlayMode;
+  onUnderlayOpen: () => void;
+  onUnderlayMode: (m: UnderlayMode) => void;
 }) {
   const floor = doc.floors.find((f) => f.id === activeFloorId) ?? doc.floors[0];
   const s = doc.settings;
@@ -97,6 +104,7 @@ export const PropertiesPanel = memo(function PropertiesPanel({
       ) : (
       <div className="flex flex-col gap-6 overflow-y-auto p-4">
         <Overview doc={doc} floor={floor} analysis={analysis} onSelect={setSelection} />
+        <UnderlaySection store={store} floor={floor} mode={underlayMode} onOpen={onUnderlayOpen} onMode={onUnderlayMode} />
         <Section title={floor.name}>
           <Field
             label="Naam van de verdieping"
@@ -310,3 +318,120 @@ export const PropertiesPanel = memo(function PropertiesPanel({
     </aside>
   );
 });
+
+export type UnderlayMode = "move" | "straighten" | "scale" | null;
+
+/**
+ * Onderlegger (foto of plan om over te trekken): kiezen, doorzichtigheid,
+ * verplaatsen, rechtzetten, schaal bijstellen, verbergen of weghalen.
+ */
+function UnderlaySection({
+  store,
+  floor,
+  mode,
+  onOpen,
+  onMode,
+}: {
+  store: EditorStore;
+  floor: Floor;
+  mode: UnderlayMode;
+  onOpen: () => void;
+  onMode: (m: UnderlayMode) => void;
+}) {
+  const u = floor.underlay;
+  const [opacity, setOpacity] = useState<number | null>(null);
+  if (!u)
+    return (
+      <Section title="Overtrekken">
+        <p className="text-[13px] leading-relaxed text-ink-2">
+          Heb je een plan op papier, als pdf of als foto? Leg het onder je tekening en teken de muren erover.
+        </p>
+        <Button size="sm" icon={<ImagePlus size={16} />} className="self-start" onClick={onOpen}>
+          Foto of pdf kiezen
+        </Button>
+      </Section>
+    );
+  const set = (patch: Partial<Underlay> | null, what: string) => {
+    const after = { ...floor, underlay: patch === null ? undefined : { ...u, ...patch } };
+    store.execute(editFloor(floor, after, what, `${what}: ongedaan`, `${what}: opnieuw`));
+    store.seal();
+  };
+  const modeBtn = (m: Exclude<UnderlayMode, null>, label: string, icon: React.ReactNode) => (
+    <Button size="sm" variant={mode === m ? "primary" : "secondary"} icon={icon} aria-pressed={mode === m} onClick={() => onMode(mode === m ? null : m)}>
+      {label}
+    </Button>
+  );
+  const hint =
+    mode === "move"
+      ? "Sleep op het plan om de onderlegger te verschuiven."
+      : mode === "straighten"
+        ? "Klik twee punten op een muur van de onderlegger die recht moet staan."
+        : mode === "scale"
+          ? "Klik het begin en einde van een maat die je kent, en typ die maat."
+          : null;
+  const shown = opacity ?? u.opacity;
+  return (
+    <Section title="Onderlegger">
+      <p className="truncate text-[13px] text-ink-2" title={u.name}>
+        {u.name}
+      </p>
+      <Toggle label="Tonen" checked={u.visible} onChange={(v) => set({ visible: v }, v ? "Onderlegger getoond" : "Onderlegger verborgen")} />
+      <label className="flex flex-col gap-1.5">
+        <span className="flex justify-between text-[13px] font-medium text-ink-2">
+          Zichtbaarheid <span className="tabular text-ink-3">{Math.round(shown * 100)} %</span>
+        </span>
+        <input
+          type="range"
+          min={10}
+          max={100}
+          step={5}
+          value={Math.round(shown * 100)}
+          onChange={(e) => setOpacity(Number(e.target.value) / 100)}
+          onPointerUp={() => {
+            if (opacity !== null && opacity !== u.opacity) set({ opacity }, "Zichtbaarheid onderlegger");
+            setOpacity(null);
+          }}
+          onKeyUp={() => {
+            if (opacity !== null && opacity !== u.opacity) set({ opacity }, "Zichtbaarheid onderlegger");
+            setOpacity(null);
+          }}
+          className="accent-[var(--accent)]"
+          aria-label="Zichtbaarheid van de onderlegger"
+        />
+      </label>
+      <div className="flex flex-wrap gap-2">
+        {modeBtn("move", "Verschuiven", <Move size={16} />)}
+        {modeBtn("straighten", "Rechtzetten", <RotateCw size={16} />)}
+        {modeBtn("scale", "Schaal bijstellen", <Ruler size={16} />)}
+      </div>
+      {hint && <p className="rounded-[var(--radius-control)] bg-accent-soft px-3 py-2 text-[12.5px] text-accent-ink">{hint} Esc stopt.</p>}
+      <div className="flex items-center gap-2">
+        <span className="text-[13px] text-ink-2">Draaien</span>
+        <IconButton size="sm" label="Kwartslag tegen de klok in" onClick={() => set({ rotation: (u.rotation + 270) % 360 }, "Onderlegger gedraaid")}>
+          <RotateCcw size={16} />
+        </IconButton>
+        <IconButton size="sm" label="Kwartslag met de klok mee" onClick={() => set({ rotation: (u.rotation + 90) % 360 }, "Onderlegger gedraaid")}>
+          <RotateCw size={16} />
+        </IconButton>
+        <span className="tabular text-[12px] text-ink-3">{(Math.round(u.rotation * 10) / 10).toLocaleString("nl-BE")}°</span>
+      </div>
+      <div className="flex flex-wrap gap-2">
+        <Button size="sm" variant="ghost" icon={<ImagePlus size={16} />} onClick={onOpen}>
+          Andere foto of pdf
+        </Button>
+        <Button
+          size="sm"
+          variant="ghost"
+          icon={<Trash2 size={16} />}
+          className="text-danger! hover:text-danger!"
+          onClick={() => {
+            onMode(null);
+            set(null, "Onderlegger weggehaald");
+          }}
+        >
+          Weghalen
+        </Button>
+      </div>
+    </Section>
+  );
+}

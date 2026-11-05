@@ -13,19 +13,20 @@ import { ThemeToggle } from "@/components/ui/ThemeToggle";
 import { useToast } from "@/components/ui/Toast";
 import { Autosaver, type SaveStatus } from "@/lib/editor/autosave";
 import { EditorStore } from "@/lib/editor/store";
-import { DEFAULT_AREA, fitBounds, toScreen, zoomAt, zoomPercent, type Viewport } from "@/lib/editor/viewport";
+import { DEFAULT_AREA, fitBounds, toScreen, toWorld, zoomAt, zoomPercent, type Viewport } from "@/lib/editor/viewport";
 import { formatMeters, parseLength } from "@/lib/format";
 import { analyzeFloor, functionLabel, moveNodes, rebuildFloor, stretch, type RoomInfo } from "@/lib/geometry/plan";
 import { addFloor, editFloor, renameProject, restoreVersion, updateRoom } from "@/lib/model/commands";
 import { floorsBottomUp } from "@/lib/model/doc";
 import type { Vec } from "@/lib/geometry/vec";
-import type { Floor, ProjectDoc } from "@/lib/model/types";
+import type { Floor, ProjectDoc, Underlay } from "@/lib/model/types";
 import { cleanName } from "@/lib/projects";
 import { W } from "@/lib/words";
 import type { EditorBackend } from "./backend";
 import { Compass } from "./NorthArrow";
-import { PropertiesPanel } from "./Panels";
-import { PlanCanvas } from "./PlanCanvas";
+import { PropertiesPanel, type UnderlayMode } from "./Panels";
+import { PlanCanvas, type ToolPointerEvent } from "./PlanCanvas";
+import { UnderlayDialog, type UnderlayResult } from "./UnderlayDialog";
 import { Annotations, Chip, FloorLayer, GhostFloor, Guides, OpeningLabels, OpeningsLayer, PlanPatterns, SnapMarker, type FacadeOpening, type Selection } from "./PlanLayers";
 import { doorConflicts, needsLintel, openingMarks, openingShape, roomDaylight, type OpeningShape } from "@/lib/geometry/openings";
 import { ToolRail } from "./ToolRail";
@@ -45,8 +46,29 @@ const isTyping = (t: EventTarget | null) =>
   (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable);
 
 /** Het gebied dat we bij "alles in beeld" tonen: de getekende muren, of een leeg blad. */
+/** Hoeken van een onderlegger op het plan (mm). */
+export function underlayCorners(u: Underlay): Vec[] {
+  const w = (u.pxWidth * u.scale) / 2;
+  const h = (u.pxHeight * u.scale) / 2;
+  const a = (u.rotation * Math.PI) / 180;
+  const c = Math.cos(a);
+  const s = Math.sin(a);
+  return [
+    [-w, -h],
+    [w, -h],
+    [w, h],
+    [-w, h],
+  ].map(([x, y]) => ({ x: u.x + x * c - y * s, y: u.y + x * s + y * c }));
+}
+
 function areaFor(floor: Floor) {
   const b = analyzeFloor(floor).outerBounds;
+  if (!b && floor.underlay?.visible) {
+    const pts = underlayCorners(floor.underlay);
+    const xs = pts.map((p) => p.x);
+    const ys = pts.map((p) => p.y);
+    return { minX: Math.min(...xs), minY: Math.min(...ys), maxX: Math.max(...xs), maxY: Math.max(...ys) };
+  }
   if (!b) return DEFAULT_AREA;
   const m = 1200;
   return { minX: b.minX - m, minY: b.minY - m, maxX: b.maxX + m, maxY: b.maxY + m };
@@ -138,6 +160,146 @@ export function Editor({ initialDoc, backend, email }: EditorProps) {
   const [selection, setSelection] = useState<Selection>(null);
   const tools = usePlanTools({ store, doc, floor, view, selection, setSelection, toast: toast.show });
   const shownFloor = tools.draft ?? floor;
+
+  // ---------- onderlegger (foto of pdf om over te trekken) ----------
+  // begon je met "een plan overtrekken"? dan meteen de vraag naar het bestand
+  const [underlayOpen, setUnderlayOpen] = useState(
+    () => initialDoc.start.kind === "trace" && !initialDoc.floors.some((f) => f.underlay || f.walls.length > 0),
+  );
+  const [underlayMode, setUnderlayModeState] = useState<UnderlayMode>(null);
+  const [underlayPts, setUnderlayPts] = useState<Vec[]>([]);
+  const [underlayHover, setUnderlayHover] = useState<Vec | null>(null);
+  const [underlayDraft, setUnderlayDraft] = useState<Underlay | null>(null);
+  const [underlayScaleAt, setUnderlayScaleAt] = useState<Vec | null>(null);
+  const underlayDrag = useRef<{ start: Vec; base: Underlay } | null>(null);
+  const [underlaySrc, setUnderlaySrc] = useState<{ src: string; url: string } | null>(null);
+  const underlay = underlayDraft ?? floor.underlay;
+  const setUnderlayMode = useCallback((m: UnderlayMode) => {
+    setUnderlayModeState(m);
+    setUnderlayPts([]);
+    setUnderlayScaleAt(null);
+  }, []);
+  const openUnderlay = useCallback(() => setUnderlayOpen(true), []);
+  // tijdelijke link naar het bestand ophalen
+  useEffect(() => {
+    const src = floor.underlay?.src;
+    if (!src || underlaySrc?.src === src) return;
+    let alive = true;
+    backend
+      .underlayUrl(src)
+      .then((url) => alive && setUnderlaySrc({ src, url }))
+      .catch(() => alive && toast.show("De onderlegger kon niet geladen worden."));
+    return () => {
+      alive = false;
+    };
+  }, [floor.underlay?.src, underlaySrc?.src, backend, toast]);
+
+  const placeUnderlay = useCallback(
+    async (r: UnderlayResult) => {
+      const src = await backend.uploadUnderlay(r.blob);
+      const st = store.getState();
+      const f = st.doc.floors.find((x) => x.id === st.activeFloorId) ?? st.doc.floors[0];
+      const c = view ? toWorld(view, { x: size.current.w / 2, y: size.current.h / 2 }) : { x: 0, y: 0 };
+      const u: Underlay = {
+        src,
+        name: r.name,
+        pxWidth: r.pxWidth,
+        pxHeight: r.pxHeight,
+        x: Math.round(c.x),
+        y: Math.round(c.y),
+        scale: r.scale,
+        rotation: 0,
+        opacity: 0.55,
+        visible: true,
+      };
+      store.execute(editFloor(f, { ...f, underlay: u }, "Onderlegger geplaatst", "Onderlegger weggehaald", "Onderlegger terug geplaatst"));
+      store.seal();
+      setUnderlayOpen(false);
+      const after = { ...f, underlay: u };
+      setView(fitBounds(areaFor(after.walls.length ? f : after), size.current.w, size.current.h));
+      toast.show("Klaar om over te trekken. Teken de muren op de onderlegger.");
+    },
+    [backend, store, view, setView, toast],
+  );
+  const commitUnderlay = useCallback(
+    (u: Underlay, what: string) => {
+      const st = store.getState();
+      const f = st.doc.floors.find((x) => x.id === st.activeFloorId) ?? st.doc.floors[0];
+      store.execute(editFloor(f, { ...f, underlay: u }, what, `${what}: ongedaan`, `${what}: opnieuw`));
+      store.seal();
+    },
+    [store],
+  );
+  /** Klikken en slepen op het plan terwijl je de onderlegger bijstelt. */
+  const onUnderlayTool = (e: ToolPointerEvent): boolean => {
+    const u = floor.underlay;
+    if (!underlayMode || !u) return false;
+    if (e.phase === "cancel") {
+      setUnderlayMode(null);
+      setUnderlayDraft(null);
+      underlayDrag.current = null;
+      return true;
+    }
+    if (underlayMode === "move") {
+      if (e.phase === "down") underlayDrag.current = { start: e.world, base: u };
+      const d = underlayDrag.current;
+      if (d && (e.phase === "move" || e.phase === "up")) {
+        const moved = { ...d.base, x: Math.round(d.base.x + e.world.x - d.start.x), y: Math.round(d.base.y + e.world.y - d.start.y) };
+        if (e.phase === "move") setUnderlayDraft(moved);
+        else {
+          underlayDrag.current = null;
+          setUnderlayDraft(null);
+          if (moved.x !== u.x || moved.y !== u.y) commitUnderlay(moved, "Onderlegger verschoven");
+        }
+      }
+      return true;
+    }
+    if (e.phase === "hover" || e.phase === "move") {
+      setUnderlayHover(e.world);
+      return true;
+    }
+    if (e.phase !== "down" || underlayScaleAt) return true;
+    const pts = [...underlayPts, e.world];
+    if (pts.length < 2) {
+      setUnderlayPts(pts);
+      return true;
+    }
+    const [p, q] = pts;
+    if (Math.hypot(q.x - p.x, q.y - p.y) < 50) return true;
+    if (underlayMode === "straighten") {
+      // draai rond het eerste punt tot de lijn horizontaal of verticaal staat
+      const ang = (Math.atan2(q.y - p.y, q.x - p.x) * 180) / Math.PI;
+      const delta = Math.round(ang / 90) * 90 - ang;
+      const r = (delta * Math.PI) / 180;
+      const cx = u.x - p.x;
+      const cy = u.y - p.y;
+      commitUnderlay(
+        {
+          ...u,
+          rotation: (((u.rotation + delta) % 360) + 360) % 360,
+          x: Math.round(p.x + cx * Math.cos(r) - cy * Math.sin(r)),
+          y: Math.round(p.y + cx * Math.sin(r) + cy * Math.cos(r)),
+        },
+        "Onderlegger rechtgezet",
+      );
+      setUnderlayMode(null);
+      return true;
+    }
+    // schaal: vraag de echte maat
+    setUnderlayPts(pts);
+    setUnderlayScaleAt(e.screen);
+    return true;
+  };
+  const applyUnderlayScale = (text: string) => {
+    const u = floor.underlay;
+    const mm = parseLength(text);
+    const [p, q] = underlayPts;
+    setUnderlayScaleAt(null);
+    if (!u || !mm || !p || !q) return setUnderlayMode(null);
+    const k = mm / Math.hypot(q.x - p.x, q.y - p.y);
+    commitUnderlay({ ...u, scale: u.scale * k, x: Math.round(p.x + (u.x - p.x) * k), y: Math.round(p.y + (u.y - p.y) * k) }, "Schaal onderlegger bijgesteld");
+    setUnderlayMode(null);
+  };
   const { setTool } = tools;
   const selectFromPanel = useCallback(
     (sel: Selection) => {
@@ -369,7 +531,7 @@ export function Editor({ initialDoc, backend, email }: EditorProps) {
             view={view}
             onViewChange={setView}
             onResize={onResize}
-            onTool={tools.onTool}
+            onTool={(e) => onUnderlayTool(e) || tools.onTool(e)}
             cursor={tools.cursor}
             touchOffset={tools.tool === "select" ? 0 : 56}
             overlay={(v) => (
@@ -385,6 +547,21 @@ export function Editor({ initialDoc, backend, email }: EditorProps) {
                   }
                 />
                 {!moving && <OpeningLabels shapes={openingShapes} view={v} />}
+                {underlayMode && underlayMode !== "move" && underlayPts.length > 0 && (
+                  <g pointerEvents="none">
+                    {(() => {
+                      const a = toScreen(v, underlayPts[0]);
+                      const b = toScreen(v, underlayPts[1] ?? underlayHover ?? underlayPts[0]);
+                      return (
+                        <>
+                          <line x1={a.x} y1={a.y} x2={b.x} y2={b.y} stroke="var(--accent)" strokeWidth={2} strokeDasharray="6 4" />
+                          <circle cx={a.x} cy={a.y} r={5} fill="var(--bg)" stroke="var(--accent)" strokeWidth={2} />
+                          <circle cx={b.x} cy={b.y} r={5} fill="var(--bg)" stroke="var(--accent)" strokeWidth={2} />
+                        </>
+                      );
+                    })()}
+                  </g>
+                )}
                 {ghostOpening && ghostLintel && (
                   <Chip
                     at={{ x: toScreen(v, ghostOpening.center).x, y: toScreen(v, ghostOpening.center).y - 34 }}
@@ -427,7 +604,28 @@ export function Editor({ initialDoc, backend, email }: EditorProps) {
           >
             {view && <PlanPatterns zoom={view.zoom} />}
             {below && <GhostFloor analysis={below} />}
-            <FloorLayer analysis={analysis} selection={selection} hover={tools.hover} />
+            <FloorLayer
+              analysis={analysis}
+              selection={selection}
+              hover={tools.hover}
+              underlay={
+                underlay?.visible && underlaySrc && underlaySrc.src === underlay.src ? (
+                  <image
+                    href={underlaySrc.url}
+                    x={underlay.x - (underlay.pxWidth * underlay.scale) / 2}
+                    y={underlay.y - (underlay.pxHeight * underlay.scale) / 2}
+                    width={underlay.pxWidth * underlay.scale}
+                    height={underlay.pxHeight * underlay.scale}
+                    transform={`rotate(${underlay.rotation} ${underlay.x} ${underlay.y})`}
+                    opacity={underlay.opacity}
+                    preserveAspectRatio="none"
+                    className="plan-underlay"
+                    pointerEvents="none"
+                    data-underlay=""
+                  />
+                ) : null
+              }
+            />
             <OpeningsLayer shapes={openingShapes} selection={selection} hover={tools.hover} ghost={ghostOpening} conflicts={conflicts} />
             {tools.preview.chain && (
               <g opacity={0.7}>
@@ -493,6 +691,22 @@ export function Editor({ initialDoc, backend, email }: EditorProps) {
             );
           })()}
 
+          {underlayScaleAt && (
+            <input
+              autoFocus
+              aria-label="Echte maat tussen de twee punten"
+              placeholder="bv. 4,50"
+              onKeyDown={(e) => {
+                if (e.key === "Enter") applyUnderlayScale((e.target as HTMLInputElement).value);
+                if (e.key === "Escape") setUnderlayMode(null);
+                e.stopPropagation();
+              }}
+              onBlur={(e) => e.target.value && applyUnderlayScale(e.target.value)}
+              inputMode="decimal"
+              className="tabular absolute z-30 h-8 w-28 -translate-x-1/2 translate-y-3 rounded-[var(--radius-control)] border-2 border-accent bg-bg px-2 text-center text-sm text-ink shadow-[var(--shadow-float)] outline-none"
+              style={{ left: underlayScaleAt.x, top: underlayScaleAt.y }}
+            />
+          )}
           {dimEdit && (
             <input
               autoFocus
@@ -583,11 +797,15 @@ export function Editor({ initialDoc, backend, email }: EditorProps) {
               setSelection={selectFromPanel}
               analysis={analysis}
               onDelete={tools.deleteSelection}
+              underlayMode={underlayMode}
+              onUnderlayOpen={openUnderlay}
+              onUnderlayMode={setUnderlayMode}
             />
           </div>
         )}
       </div>
 
+      {underlayOpen && <UnderlayDialog open onClose={() => setUnderlayOpen(false)} onDone={placeUnderlay} />}
       <VersionsDialog
         open={versionsOpen}
         onClose={() => setVersionsOpen(false)}

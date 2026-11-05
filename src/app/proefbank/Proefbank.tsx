@@ -57,6 +57,13 @@ export function Proefbank() {
       async addVersion(d, label) {
         versions.unshift({ id: crypto.randomUUID(), label, created_at: new Date().toISOString(), doc: d });
       },
+      // in het geheugen: een tijdelijke link naar de afbeelding
+      async uploadUnderlay(blob) {
+        return URL.createObjectURL(blob);
+      },
+      async underlayUrl(src) {
+        return src;
+      },
     };
   }, []);
 

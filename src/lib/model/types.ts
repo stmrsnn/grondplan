@@ -73,6 +73,31 @@ export interface Floor {
   openings: Opening[];
   rooms: Room[];
   items: Item[];
+  /** Foto of plan om over te trekken (onder de tekening). */
+  underlay?: Underlay;
+}
+
+/**
+ * Een afbeelding onder de tekening, op schaal. De afbeelding is al
+ * rechtgetrokken (bij een schuine foto); hier staat enkel waar ze ligt.
+ */
+export interface Underlay {
+  /** Waar het bestand staat: in de opslag (pad) of in het geheugen (proefbank). */
+  src: string;
+  name: string;
+  /** Grootte van de afbeelding in pixels. */
+  pxWidth: number;
+  pxHeight: number;
+  /** Midden van de afbeelding op het plan (mm). */
+  x: number;
+  y: number;
+  /** mm per pixel. */
+  scale: number;
+  /** Draaiing in graden, met de klok mee. */
+  rotation: number;
+  /** 0 – 1 */
+  opacity: number;
+  visible: boolean;
 }
 
 /** Knooppunt dat door meerdere muren gedeeld kan worden. */

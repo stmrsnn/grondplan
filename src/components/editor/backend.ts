@@ -14,4 +14,8 @@ export interface EditorBackend {
   listVersions(): Promise<{ id: string; label: string; created_at: string }[]>;
   loadVersion(id: string): Promise<ProjectDoc>;
   addVersion(doc: ProjectDoc, label: string): Promise<void>;
+  /** Bewaart een onderlegger (afbeelding) en geeft de verwijzing terug. */
+  uploadUnderlay(blob: Blob): Promise<string>;
+  /** Link om een bewaarde onderlegger te tonen. */
+  underlayUrl(src: string): Promise<string>;
 }

@@ -97,10 +97,13 @@ export const FloorLayer = memo(function FloorLayer({
   analysis,
   selection,
   hover,
+  underlay,
 }: {
   analysis: FloorAnalysis;
   selection: Selection;
   hover: Selection;
+  /** Foto of plan om over te trekken: boven de ruimtes, onder de muren. */
+  underlay?: React.ReactNode;
 }) {
   const sel = (k: string, id: Id) => selection?.kind === k && selection.id === id;
   const hov = (k: string, id: Id) => hover?.kind === k && hover.id === id;
@@ -130,6 +133,7 @@ export const FloorLayer = memo(function FloorLayer({
           <path key={`h-${r.room.id}`} d={path(r.inner)} fill="var(--accent)" opacity={0.06} />
         ) : null,
       )}
+      {underlay}
       {/* doorgesneden muren: papier, dan per laag de arcering van het materiaal */}
       <path d={drawing.walls} fill="var(--plan-paper)" data-walls="" />
       {drawing.byMaterial.map(([m, d]) =>

@@ -239,3 +239,84 @@ test("een kamer half over een andere kamer wordt geweigerd", async ({ page }) =>
   await expect(page.getByText(/valt half over een andere kamer/)).toBeVisible();
   expect(await overview(page)).toEqual(["Ruimte 1 20,0 m²", "Gelijkvloers 20,0 m²"]);
 });
+
+test.describe("overtrekken", () => {
+  /** Klik op een punt van de afbeelding (in pixels van het bestand). */
+  const clickImg = async (page: Page, imgW: number, x: number, y: number) => {
+    const c = page.getByLabel("Afbeelding: klik om punten te zetten");
+    const r = (await c.boundingBox())!;
+    const k = r.width / imgW;
+    await page.mouse.move(r.x + x * k, r.y + y * k);
+    await page.mouse.click(r.x + x * k, r.y + y * k);
+  };
+
+  test("een plan op schaal zetten met twee punten en een maat", async ({ page }) => {
+    await page.getByRole("button", { name: "Foto of pdf kiezen" }).click();
+    await page.getByLabel("Foto of pdf kiezen").setInputFiles("e2e/fixtures/plan-recht.png");
+    await page.getByRole("button", { name: /Twee punten en een maat/ }).click();
+    // hartlijnen van de linker- en rechtermuur: 600 px = 6,00 m
+    await clickImg(page, 900, 150, 350);
+    await clickImg(page, 900, 750, 350);
+    await page.getByLabel("Echte lengte A–B").fill("6");
+    await page.getByRole("button", { name: "Op schaal zetten" }).click();
+    const img = page.locator("svg[role=application] image[data-underlay]");
+    await expect(img).toBeVisible();
+    // 900 px × 10 mm per px = 9 m breed
+    expect(Math.round(Number(await img.getAttribute("width")))).toBe(9000);
+    await expect(page.getByText("plan-recht.png")).toBeVisible();
+  });
+
+  test("op het plan: schaal bijstellen en rechtzetten", async ({ page }) => {
+    await page.getByRole("button", { name: "Foto of pdf kiezen" }).click();
+    await page.getByLabel("Foto of pdf kiezen").setInputFiles("e2e/fixtures/plan-recht.png");
+    await page.getByRole("button", { name: /Twee punten en een maat/ }).click();
+    await clickImg(page, 900, 150, 350);
+    await clickImg(page, 900, 750, 350);
+    await page.getByLabel("Echte lengte A–B").fill("6");
+    await page.getByRole("button", { name: "Op schaal zetten" }).click();
+    const img = page.locator("svg[role=application] image[data-underlay]");
+    await expect(img).toBeVisible();
+    const box = (await img.boundingBox())!;
+    // de linker- en rechtermuur liggen op 150 en 750 px van de 900
+    const at = (fx: number, fy: number) => ({ x: box.x + (fx / 900) * box.width, y: box.y + (fy / 700) * box.height });
+    // schaal bijstellen: die afstand is eigenlijk 7,50 m → alles 1,25 keer groter
+    await page.getByRole("button", { name: "Schaal bijstellen" }).click();
+    const a = at(150, 350);
+    const b = at(750, 350);
+    await page.mouse.click(a.x, a.y);
+    await page.mouse.move(b.x, b.y);
+    await page.mouse.click(b.x, b.y);
+    const input = page.getByLabel("Echte maat tussen de twee punten");
+    await input.fill("7,5");
+    await input.press("Enter");
+    await expect.poll(async () => Math.round(Number(await img.getAttribute("width")))).toBe(11250);
+    // rechtzetten: een licht scheve lijn wordt horizontaal → draaiing ≠ 0
+    await page.getByRole("button", { name: "Rechtzetten" }).click();
+    const box2 = (await img.boundingBox())!;
+    await page.mouse.click(box2.x + 100, box2.y + 100);
+    await page.mouse.move(box2.x + 300, box2.y + 110);
+    await page.mouse.click(box2.x + 300, box2.y + 110);
+    await expect.poll(async () => (await img.getAttribute("transform")) ?? "").not.toMatch(/^rotate\(0 /);
+    // ongedaan maken zet de draaiing terug
+    await page.keyboard.press("Control+z");
+    await expect.poll(async () => (await img.getAttribute("transform")) ?? "").toMatch(/^rotate\(0 /);
+  });
+
+  test("een schuine foto rechttrekken met vier hoeken", async ({ page }) => {
+    await page.getByRole("button", { name: "Foto of pdf kiezen" }).click();
+    await page.getByLabel("Foto of pdf kiezen").setInputFiles("e2e/fixtures/plan-schuin.jpg");
+    await page.getByRole("button", { name: /Vier hoeken van een rechthoek/ }).click();
+    // buitenhoeken van het plan op de schuine foto
+    for (const [x, y] of [
+      [292, 207],
+      [626, 233],
+      [649, 500],
+      [252, 473],
+    ])
+      await clickImg(page, 900, x, y);
+    await page.getByLabel("Breedte A–B").fill("6,30");
+    await page.getByLabel("Diepte B–C").fill("4,80");
+    await page.getByRole("button", { name: "Op schaal zetten" }).click();
+    await expect(page.locator("svg[role=application] image[data-underlay]")).toBeVisible();
+  });
+});
