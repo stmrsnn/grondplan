@@ -5,7 +5,7 @@ import { formatLength } from "@/lib/format";
 import { gridLevels, niceScaleBar, panBy, toWorld, zoomAt, type Viewport } from "@/lib/editor/viewport";
 import type { Vec } from "@/lib/geometry/vec";
 
-export type PointerPhase = "down" | "move" | "up" | "hover" | "cancel" | "dblclick" | "click";
+export type PointerPhase = "down" | "move" | "up" | "hover" | "leave" | "cancel" | "dblclick" | "click";
 
 export interface ToolPointerEvent {
   phase: PointerPhase;
@@ -237,6 +237,12 @@ export function PlanCanvas({ view, onViewChange, onResize, onTool, cursor, touch
         onPointerMove={onPointerMove}
         onPointerUp={onPointerUp}
         onPointerCancel={onPointerUp}
+        onPointerLeave={(e) => {
+          // de muis verlaat het tekenvlak: geen oplichtende muur of zwevend voorbeeld laten staan
+          if (e.pointerType !== "mouse" || pointers.current.size > 0 || !onTool) return;
+          const te = toolEvent("leave", e);
+          if (te) onTool(te);
+        }}
         onDoubleClick={(e) => {
           const te = toolEvent("dblclick", e);
           if (te) onTool?.(te);

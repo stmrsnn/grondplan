@@ -8,7 +8,7 @@ import { addPolyline, addRectangle } from "@/lib/geometry/plan";
 import { createDoc } from "@/lib/model/doc";
 import type { ProjectDoc } from "@/lib/model/types";
 
-type W = Window & { __bewaard?: ProjectDoc; __conflict?: boolean };
+type W = Window & { __bewaard?: ProjectDoc; __conflict?: boolean; __startDoc?: ProjectDoc };
 
 /** Tekenvlak zonder aanmelden, met bewaren en versies in het geheugen. */
 export function Proefbank() {
@@ -28,7 +28,16 @@ export function Proefbank() {
       for (let j = 0; j <= 10; j++) f = addPolyline(f, [{ x: 0, y: j * 3000 }, { x: 45000, y: j * 3000 }], p);
       d = { ...d, floors: [f] };
     }
-    if (q.get("sprong")) {
+    if (q.get("sprong") === "2") {
+      // zoals een echt plan: 10 cm onderaan uitgelijnd op 15 cm, met een muur van 15 cm erop
+      const ip = (thickness: number, type?: string) => ({ thickness, height: 2600, kind: "interior" as const, loadBearing: false, type });
+      let f = addRectangle(d.floors[0], { x: -190, y: -2190 }, { x: 6190, y: 2190 }, { thickness: 380, height: 2600, kind: "exterior", loadBearing: true, type: "spouw-38" });
+      f = addPolyline(f, [{ x: -190, y: 0 }, { x: 3000, y: 0 }], ip(100, "binnen-10"));
+      f = addPolyline(f, [{ x: 3000, y: 0 }, { x: 6190, y: 0 }], ip(150));
+      f = addPolyline(f, [{ x: 3000, y: -2190 }, { x: 3000, y: 0 }], ip(150));
+      f = { ...f, walls: f.walls.map((w) => (w.thickness === 100 ? { ...w, offset: f.nodes.find((n) => n.id === w.start)!.x < 0 ? 25 : -25 } : w)) };
+      d = { ...d, floors: [f] };
+    } else if (q.get("sprong")) {
       // aansluiting: binnenmuur van 15 cm die overgaat in 10 cm, met een muur van 10 cm erop
       const ip = (thickness: number, type: string) => ({ thickness, height: 2600, kind: "interior" as const, loadBearing: false, type });
       let f = addRectangle(d.floors[0], { x: -190, y: -2190 }, { x: 6190, y: 2190 }, { thickness: 380, height: 2600, kind: "exterior", loadBearing: true, type: "spouw-38" });
@@ -37,6 +46,9 @@ export function Proefbank() {
       f = addPolyline(f, [{ x: 3000, y: -2190 }, { x: 3000, y: 0 }], ip(100, "binnen-10"));
       d = { ...d, floors: [f] };
     }
+    // een volledig plan meegeven (om een echt plan na te spelen)
+    const start = (window as W).__startDoc;
+    if (start) d = start;
     // eslint-disable-next-line react-hooks/set-state-in-effect -- nieuwe id's enkel in de browser
     setDoc(d);
   }, []);

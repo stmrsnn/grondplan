@@ -573,3 +573,28 @@ describe("vanzelf uitlijnen bij het tekenen", () => {
     expect(bottomIsLeft ? al.left : al.right).toBe(true);
   });
 });
+
+describe("voegen bij een overgang van dikte", () => {
+  it("tekent geen voeg tussen muren met dezelfde opbouw, wel tegen de dunnere muur", () => {
+    const ip = (thickness: number, type?: string) => ({ thickness, height: 2600, kind: "interior" as const, loadBearing: false, type });
+    let f = addRectangle(empty(), { x: -190, y: -2190 }, { x: 6190, y: 2190 }, { ...EXT, thickness: 380, type: "spouw-38" }, ids);
+    f = addPolyline(f, [{ x: -190, y: 0 }, { x: 3000, y: 0 }], ip(100, "binnen-10"), ids);
+    f = addPolyline(f, [{ x: 3000, y: 0 }, { x: 6190, y: 0 }], ip(150), ids);
+    f = addPolyline(f, [{ x: 3000, y: -2190 }, { x: 3000, y: 0 }], ip(150), ids);
+    // dunne muur onderaan gelijk met de dikke
+    f = { ...f, walls: f.walls.map((w) => (w.thickness === 100 ? { ...w, offset: f.nodes.find((n) => n.id === w.start)!.x < 0 ? 25 : -25 } : w)) };
+    const near = (a: { x: number; y: number }) => Math.abs(a.x - 3000) <= 80 && Math.abs(a.y) <= 80;
+    const js = analyzeFloor(f).joints.filter(([a, b]) => near(a) && near(b));
+    const key = ([a, b]: [{ x: number; y: number }, { x: number; y: number }]) =>
+      [a, b].map((p) => `${Math.round(p.x)},${Math.round(p.y)}`).sort().join("|");
+    const keys = new Set(js.map(key));
+    // tegen de dunne muur: bovenkant (2925→3000 op -25) en de kop (3000 van -25 tot 75)
+    expect(keys).toContain("2925,-25|3000,-25");
+    expect(keys).toContain("3000,-25|3000,75");
+    // geen voeg tussen de twee muren van 15 cm
+    for (const [a, b] of js) {
+      expect(Math.max(a.y, b.y) > -74 || Math.min(a.y, b.y) > -74).toBe(true);
+      if (a.x === b.x && Math.round(a.x) === 3000) expect(Math.min(a.y, b.y)).toBeGreaterThanOrEqual(-25.5);
+    }
+  });
+});

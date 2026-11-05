@@ -9,7 +9,6 @@ import {
   customWallTypes,
   MATERIAL_LABEL,
   MATERIALS,
-  typeThickness,
   WALL_TYPES,
   wallType,
   type Layer,

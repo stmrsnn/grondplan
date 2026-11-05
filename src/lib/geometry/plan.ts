@@ -383,11 +383,20 @@ export function wallPolygons(
       };
       const parallel = (o: End) => Math.abs(cross(o.d, e.d)) < 1e-6;
       const sameKind = (o: End) => o.wall.type === e.wall.type && o.wall.thickness === e.wall.thickness;
+      // voeg tussen twee muren in elkaars verlengde: enkel waar ze elkaar echt raken
+      // (een dikkere muur steekt uit; dat stuk is een vrij vlak of raakt een dwarsmuur)
+      const jointWith = (o: End) => {
+        if (!joints || sameKind(o)) return;
+        if (!parallel(o)) return void joints.push([R, L]);
+        const lo = Math.max(-e.hR, -o.hL);
+        const hi = Math.min(e.hL, o.hR);
+        if (hi - lo > 0.5) joints.push([add(p, scale(l, lo)), add(p, scale(l, hi))]);
+      };
       if (k === 2) {
         const other = list[(i + 1) % k];
         miter(other);
         // andere opbouw: een voeg op de aansluiting (bij een verstek of een rechte overgang)
-        if (joints && !sameKind(other)) joints.push([R, L]);
+        jointWith(other);
       } else if (k > 2) {
         // Aansluiting van drie of meer muren, zoals een architect ze tekent:
         // twee muren lopen door (de gevelhoek, of de rechtdoorgaande muur) en de
@@ -412,7 +421,7 @@ export function wallPolygons(
           if (pair.includes(e)) {
             const other = pair[0] === e ? pair[1] : pair[0];
             if (!parallel(other)) miter(other);
-            if (joints && !sameKind(other)) joints.push([R, L]);
+            jointWith(other);
           } else {
             // stoppen tegen het vlak van de doorlopende muren, aan elke kant tegen
             // de muur die daar ligt (die kunnen verschillend dik zijn)
@@ -426,15 +435,26 @@ export function wallPolygons(
             const stopR = onRight ? reachOf(onRight) : fallback;
             L = add(L, scale(e.d, stopL));
             R = add(R, scale(e.d, stopR));
-            // de aansluitende muur stopt tegen het vlak: daar komt een voeg
-            const sameAsPair = pair.every(sameKind);
+            // de aansluitende muur stopt tegen het vlak: een voeg, maar enkel tegen
+            // een muur met een andere opbouw (zelfde opbouw = één geheel metselwerk)
+            const differs = (o: End | undefined) => !o || !sameKind(o);
+            // het sprongetje (langs de middellijn) ligt tegen de kop van de dikste muur
+            const deeper = stopL > stopR ? onLeft : onRight;
             if (Math.abs(stopL - stopR) > 0.5) {
               const mid = [add(p, scale(e.d, stopR)), add(p, scale(e.d, stopL))];
-              if (joints && !sameAsPair) joints.push([R, mid[0]], [mid[0], mid[1]], [mid[1], L]);
+              if (joints) {
+                if (differs(onRight)) joints.push([R, mid[0]]);
+                if (differs(deeper)) joints.push([mid[0], mid[1]]);
+                if (differs(onLeft)) joints.push([mid[1], L]);
+              }
               corners.set(`${nodeId}|${e.wall.id}`, { L, R, mid });
               continue;
             }
-            if (joints && !sameAsPair) joints.push([R, L]);
+            if (joints) {
+              const c = add(p, scale(e.d, stopL));
+              if (differs(onRight)) joints.push([R, c]);
+              if (differs(onLeft)) joints.push([c, L]);
+            }
           }
         } else {
           // geen duidelijke doorlopende muur (Y-vorm): tot de verste rand van de andere

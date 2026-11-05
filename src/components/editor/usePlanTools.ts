@@ -382,6 +382,11 @@ export function usePlanTools({ store, doc, floor, view, selection, setSelection,
     (e: ToolPointerEvent): boolean => {
       if (!view) return false;
       const zoom = view.zoom;
+      if (e.phase === "leave") {
+        setHover(null);
+        if (!chain.current && !roomStart.current) setPreview(EMPTY);
+        return false;
+      }
       lastCursor.current = e.world;
 
       if (tool === "door" || tool === "window") {
